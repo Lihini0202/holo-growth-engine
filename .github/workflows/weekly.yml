@@ -1,0 +1,55 @@
+name: Weekly growth run
+
+# Every Monday 08:00 Sri Lanka time (02:30 UTC): sync lifecycle stages, run the
+# GEO check and publish the brief as a workflow artifact. Only runs when the
+# repository has the secrets configured; otherwise it exits cleanly.
+on:
+  schedule:
+    - cron: "30 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    env:
+      HOLO_GROWTH_DB: holo_growth.db
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      HUBSPOT_PRIVATE_APP_TOKEN: ${{ secrets.HUBSPOT_PRIVATE_APP_TOKEN }}
+      HOLO_SUPABASE_URL: ${{ secrets.HOLO_SUPABASE_URL }}
+      HOLO_SUPABASE_SERVICE_KEY: ${{ secrets.HOLO_SUPABASE_SERVICE_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      HOLO_GEO_OPENROUTER_MODELS: ${{ vars.HOLO_GEO_OPENROUTER_MODELS }}
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "$HUBSPOT_PRIVATE_APP_TOKEN" ] || [ -z "$HOLO_SUPABASE_URL" ]; then
+            echo "Secrets not configured; skipping."; echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.cfg.outputs.run == 'true'
+
+      - uses: actions/setup-python@v6
+        if: steps.cfg.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Run
+        if: steps.cfg.outputs.run == 'true'
+        run: |
+          pip install -e .
+          holo-growth retention sync
+          holo-growth geo run
+          holo-growth report brief --out weekly_brief.md
+
+      - uses: actions/upload-artifact@v4
+        if: steps.cfg.outputs.run == 'true'
+        with:
+          name: weekly-brief
+          path: weekly_brief.md

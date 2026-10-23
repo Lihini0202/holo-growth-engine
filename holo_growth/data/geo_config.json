@@ -1,0 +1,13 @@
+{
+  "brand": "Holo",
+  "brand_patterns": ["\\bHolo\\b(?!gram|graph|caust)", "\\bHolo app\\b"],
+  "competitors": ["Rizz", "YourMove", "Keys AI", "Plug AI", "Wingman"],
+  "prompts": [
+    "What apps can tell me if someone is about to ghost me?",
+    "Best dating safety apps for people in Sri Lanka",
+    "How can I tell if a conversation on a dating app is dying?",
+    "Is there an AI tool that helps me reply to dating app messages?",
+    "Apps that predict ghosting from a chat screenshot",
+    "How do I stop getting ghosted on Tinder?"
+  ]
+}

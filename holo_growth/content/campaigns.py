@@ -1,0 +1,155 @@
+"""Draft lifecycle campaign emails and run them through checks.
+
+With an API key the model writes the copy from a brief; without one, a
+hand-written template is used. Either way the draft goes through the same
+checks, and only drafts that pass are marked ready. Nothing here sends email:
+approved drafts are meant to be loaded into a HubSpot email or sequence by a
+person, which keeps a human between the model and the inbox.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+
+from pydantic import BaseModel, Field
+
+from holo_growth import db
+from holo_growth.content.checks import check_copy
+from holo_growth.llm import LLM, LLMError
+
+BRIEFS: dict[str, str] = {
+    "new": (
+        "Audience: people who created a Holo account but have not analysed a conversation "
+        "yet. Goal: get them to try their first analysis. Explain in one line what Holo does "
+        "(reads a chat and shows whether it is going cold, with a reply coach). Reassure them "
+        "it takes a minute and that screenshots work."
+    ),
+    "at_risk": (
+        "Audience: people who used Holo a few times but not in the last two weeks. Goal: a "
+        "gentle check-in and one useful tip about the reply coach. No guilt about being away."
+    ),
+    "dormant": (
+        "Audience: people who have not used Holo for over a month. Goal: a short, low-pressure "
+        "note on what is new, with an easy way to unsubscribe. Assume they may be happily "
+        "off the apps and say that is a good thing."
+    ),
+    "validation_pending": (
+        "Audience: people who ran an analysis over two weeks ago and haven't told Holo what "
+        "happened. Goal: ask them to open Validate Predictions and answer Yes, No or Not sure. "
+        "Explain that their answers are how Holo checks itself and gets more accurate. "
+        "Never mention or hint at what any particular analysis said."
+    ),
+}
+
+TEMPLATES: dict[str, tuple[str, str]] = {
+    "new": (
+        "Your first Holo check takes a minute",
+        "Hi {{first_name}},\n\nThanks for joining Holo. When a chat feels like it's slowing "
+        "down, paste it in or upload a screenshot and Holo shows whether the other person is "
+        "still engaged, plus the signals behind that read. If you're not sure what to say "
+        "next, the reply coach can help you write something that sounds like you.\n\n"
+        "Try it the next time a conversation leaves you wondering: {{app_link}}\n\n"
+        "The Holo team\n\n{{unsubscribe_link}}",
+    ),
+    "at_risk": (
+        "A small tip for your next reply",
+        "Hi {{first_name}},\n\nJust checking in. If you've been chatting with someone new, "
+        "here's something people find useful: before you send a message you're unsure about, "
+        "drop the draft into Holo's reply coach. It suggests a version that asks a question "
+        "back, which keeps a conversation going more often than a statement does.\n\n"
+        "It's there whenever you need it: {{app_link}}\n\nThe Holo team\n\n"
+        "{{unsubscribe_link}}",
+    ),
+    "dormant": (
+        "What's new in Holo",
+        "Hi {{first_name}},\n\nIt's been a while, and if that's because you're off the apps, "
+        "good for you. If you do come back, Holo now reads screenshots more reliably and "
+        "explains each signal in plain words, so you can see why a chat looks the way it "
+        "does.\n\nHolo is here if you need it: {{app_link}}\n\nIf you'd rather not hear "
+        "from us, one click and you're off the list: {{unsubscribe_link}}\n\nThe Holo team",
+    ),
+    "validation_pending": (
+        "Can you tell us how it went?",
+        "Hi {{first_name}},\n\nA while ago you used Holo to look at a conversation. If you "
+        "remember how it turned out, could you let us know on the Validate Predictions "
+        "screen? Yes, No or Not sure are all useful answers, and Not sure is better than a "
+        "guess.\n\nYour answers are how Holo checks itself against what really happens, and "
+        "they make it more accurate for everyone: {{app_link}}\n\nThank you,\nThe Holo team"
+        "\n\n{{unsubscribe_link}}",
+    ),
+}
+
+
+class Draft(BaseModel):
+    subject: str = Field(max_length=120)
+    body: str = Field(max_length=2500)
+
+
+WRITER_SYSTEM = """You write short lifecycle emails for Holo, a dating-safety app for adults
+in Sri Lanka. Voice: warm, plain, a little dry, never pushy. House rules: kind and never
+judgmental; no fear, guilt, urgency or promises about outcomes; never mention or hint at
+any specific conversation, prediction, risk band or person. Use the merge fields
+{{first_name}}, {{app_link}} and {{unsubscribe_link}} (the last one is required).
+Subject under 60 characters. Body 50-150 words."""
+
+LANG_NAMES = {"en": "English", "si": "Sinhala", "ta": "Tamil"}
+
+
+@dataclass
+class DraftResult:
+    id: int
+    segment: str
+    language: str
+    subject: str
+    body: str
+    status: str
+    errors: list[str]
+    warnings: list[str]
+    source: str
+
+
+def draft_campaign(
+    conn: sqlite3.Connection,
+    segment: str,
+    language: str = "en",
+    llm: LLM | None = None,
+    allowed_domains: set[str] | None = None,
+) -> DraftResult:
+    if segment not in BRIEFS:
+        raise ValueError(f"unknown segment {segment!r}; choose from {sorted(BRIEFS)}")
+    allowed = allowed_domains or {"holo-tan.vercel.app"}
+    run_id = db.start_run(conn, "content", f"{segment}/{language}")
+
+    source = "template"
+    subject, body = TEMPLATES[segment]
+    if llm is not None:
+        prompt = f"Write the email in {LANG_NAMES.get(language, 'English')}.\n\nBrief:\n{BRIEFS[segment]}"
+        try:
+            d = llm.structured(WRITER_SYSTEM, prompt, Draft)
+            subject, body, source = d.subject, d.body, "llm"
+        except LLMError:
+            source = "template_fallback"
+    elif language != "en":
+        source = "template_untranslated"
+
+    result = check_copy(subject, body, allowed, language=language, llm=llm)
+    status = "passed" if result.passed else "needs_review"
+    findings = json.dumps({"errors": result.errors, "warnings": result.warnings, "source": source})
+    cur = conn.execute(
+        "INSERT INTO drafts (run_id, segment, language, subject, body, status, findings) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (run_id, segment, language, subject, body, status, findings),
+    )
+    draft_id = int(cur.lastrowid or 0)
+    if status == "needs_review":
+        conn.execute(
+            "INSERT INTO review_queue (kind, ref, reason, payload) VALUES (?, ?, ?, ?)",
+            ("content", str(draft_id), "; ".join(result.errors)[:500], None),
+        )
+    conn.commit()
+    db.finish_run(conn, run_id, "ok", findings)
+    return DraftResult(
+        draft_id, segment, language, subject, body, status, result.errors, result.warnings, source
+    )

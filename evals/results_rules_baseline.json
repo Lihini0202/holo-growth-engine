@@ -1,0 +1,12 @@
+[
+  {
+    "enricher": "rules",
+    "n": 60,
+    "persona_accuracy": 0.9,
+    "intent_accuracy": 0.833,
+    "language_accuracy": 1.0,
+    "all_three_correct": 0.75,
+    "review_rate": 0.617,
+    "auto_accepted_all_correct": 1.0
+  }
+]

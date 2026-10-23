@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "holo-growth": {
+      "command": "holo-growth-mcp",
+      "env": {
+        "HOLO_GROWTH_DB": "/absolute/path/to/holo_growth.db",
+        "HOLO_GROWTH_INBOX": "/absolute/path/to/inbox"
+      }
+    }
+  }
+}
