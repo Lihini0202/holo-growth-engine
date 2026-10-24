@@ -10,19 +10,20 @@ when people ask AI assistants for help. All of it can be run from the command li
 dashboard, or by asking Claude through an MCP server.
 
 ```
-$ holo-growth leads process saturday_signups.csv --event "Campus Launch - Moratuwa"
+$ holo-growth leads process saturday_signups.csv --event "Online Dating Safety Workshop - Colombo"
 
-Campus Launch - Moratuwa: 123 rows read, 3 rejected, 9 duplicates merged, 35 without consent
-(not uploaded). CRM: 76 created, 0 updated, 0 failed. 47 sent to review, 18 hot leads.
+Online Dating Safety Workshop - Colombo: 123 rows read, 3 rejected, 9 duplicates merged,
+33 without consent (not uploaded). CRM: 78 created, 0 updated, 0 failed. 47 sent to review,
+20 hot leads. Subscriptions: 78 subscribed, 0 unsubscribed.
 ```
 
 Everything runs offline with no API keys (rules instead of an LLM, a local SQLite CRM,
-synthetic Holo users), so you can try it in two minutes:
+synthetic Holo users and website traffic), so you can try it in two minutes:
 
 ```bash
 pip install -e ".[dev,dashboard]"
 holo-growth demo                     # runs every part end to end on synthetic data
-streamlit run dashboard/app.py       # HOLO_GROWTH_DB=demo.db to view the demo
+HOLO_GROWTH_DB=demo.db streamlit run dashboard/app.py
 ```
 
 ## How it fits together
@@ -35,6 +36,7 @@ flowchart LR
         retention[Lifecycle stages<br/>from usage]
         content[Campaign drafts<br/>+ pre-send checks]
         geo[GEO tracker]
+        web[Website sign-ups<br/>by source]
         ledger[(Consent ledger<br/>+ run log, SQLite)]
         leads --> ledger
         retention --> ledger
@@ -42,6 +44,8 @@ flowchart LR
     holo[(Holo Supabase<br/>usage metadata only)] -->|read-only| retention
     leads -->|upsert by email| hubspot[HubSpot]
     retention -->|stage per consented user| hubspot
+    ledger -->|email subscription status| hubspot
+    ga4[(GA4)] -->|totals by source, read-only| web
     claude[Claude API] -.-> leads & content & geo
     ledger --> dash[Dashboard / weekly brief]
     mcp[MCP server] --> engine
@@ -53,8 +57,9 @@ flowchart LR
 | **Lifecycle sync** | Reads who used Holo and when, puts each user in a stage (new, activated, engaged, at risk, dormant), counts predictions waiting for the user to confirm what happened, syncs consented users to HubSpot | CRM data entered once, from the source |
 | **Campaign checks** | Drafts lifecycle emails (Claude or templates) and blocks anything with false urgency, guarantees, accuracy claims, off-brand tone, unknown links, or a hint about someone's private analyses | Content checks before publishing |
 | **GEO tracker** | Asks Claude (and any OpenRouter model) the questions Holo users ask, records whether Holo is named and which competitors are | Tracking how we show up in AI search |
-| **Reports** | Event funnel (lead to user to active), stages, AI visibility, review queue, as a dashboard and a markdown weekly brief | Pipeline reporting |
-| **MCP server** | Ten tools so anyone can run the above by asking Claude | Reusable tools the team can run |
+| **Website sign-ups** | Pulls sessions and sign-ups per day and source from GA4 (Instagram, event QR codes, ChatGPT referrals...) into the funnel and the brief | Knowing which channels bring sign-ups |
+| **Reports** | Event funnel (lead to user to active), stages, website sign-ups by source, AI visibility, review queue, as a dashboard and a markdown weekly brief | Pipeline reporting |
+| **MCP server** | Eleven tools so anyone can run the above by asking Claude | Reusable tools the team can run |
 
 ## Decisions worth explaining
 
@@ -74,8 +79,10 @@ source and time. No record means no marketing. An unsubscribe always wins: re-im
 old signup sheet can't re-subscribe someone, and a stale "yes" from the app can't either,
 only a newer explicit choice can. People who said no are counted and then dropped; their
 details aren't stored. People who unsubscribe are told to the CRM exactly once, so its
-workflows stop, and never again. (This comes from six months building consent delegation
-for WSO2's OpenFGC.)
+workflows stop, and never again. In HubSpot the ledger drives the contact's own email
+subscription status, not just a custom property: an outbox pushes each change once, with
+where and when the choice was made as the legal basis note, and retries anything HubSpot
+didn't accept. (This comes from six months building consent delegation for WSO2's OpenFGC.)
 
 **The model's output is checked, not trusted.** Enrichment uses forced tool use with the
 Pydantic schema, validates the result, retries once with the validation error, and falls back
@@ -101,7 +108,9 @@ stays offline otherwise; `holo-growth status` shows which.
 | Service | Variable | Notes |
 |---|---|---|
 | Claude | `ANTHROPIC_API_KEY` | Enrichment, drafting, tone review, GEO |
-| HubSpot | `HUBSPOT_PRIVATE_APP_TOKEN` | A free developer test account works. Custom `holo_*` properties are created on first run |
+| HubSpot | `HUBSPOT_PRIVATE_APP_TOKEN` | A Service Key (Development > Keys > Service keys) from any account, free included; an older legacy private app token works too. Custom `holo_*` properties are created on first run |
+| HubSpot email subscriptions | `HUBSPOT_SUBSCRIPTION_ID` | Needs the `communication_preferences.read_write` scope. `holo-growth consent types` lists the ids. Unset, consent travels only as the `holo_marketing_consent` property |
+| GA4 | `GA4_PROPERTY_ID`, `GA4_CREDENTIALS_FILE` | Free. `pip install -e ".[ga4]"`, then a Google Cloud service account with Viewer access to the property. `GA4_SIGNUP_EVENT` defaults to `sign_up` |
 | Holo | `HOLO_SUPABASE_URL`, `HOLO_SUPABASE_SERVICE_KEY` | Read-only. Marketing consent needs the table in `integrations/holo/marketing_consent.sql`; without it nobody is synced |
 | More GEO providers | `OPENROUTER_API_KEY`, `HOLO_GEO_OPENROUTER_MODELS` | Holo already uses OpenRouter for its reply coach |
 
@@ -109,15 +118,18 @@ stays offline otherwise; `holo-growth status` shows which.
 holo-growth leads process signups.xlsx --event "Colombo Tech Meetup" --dry-run
 holo-growth leads process signups.xlsx --event "Colombo Tech Meetup"
 holo-growth review list
-holo-growth review approve 12 --persona student --intent high
+holo-growth review approve 12 --persona young_adult --intent high
 holo-growth retention sync
 holo-growth content draft validation_pending
 holo-growth geo run
 holo-growth consent withdraw someone@gmail.com
+holo-growth consent sync                 # push consent changes to HubSpot subscriptions
+holo-growth web sync                     # GA4 sessions and sign-ups by source, last 28 days
 holo-growth report brief --out weekly_brief.md
 ```
 
-`.github/workflows/weekly.yml` runs the sync, GEO check and brief every Monday at 08:00 Sri
+`.github/workflows/weekly.yml` runs the sync, GA4 pull (when `GA4_PROPERTY_ID` and the
+`GA4_SERVICE_ACCOUNT_JSON` secret are set), GEO check and brief every Monday at 08:00 Sri
 Lanka time once the secrets are set.
 
 ### From Claude
@@ -127,9 +139,21 @@ holo-growth-mcp        # stdio MCP server
 ```
 
 Add `integrations/claude/mcp.json` to Claude Desktop or Claude Code, drop a signup sheet in
-the inbox folder, then ask *"process the Moratuwa sheet"*. Write tools default to
+the inbox folder, then ask *"process the workshop sheet"*. Write tools default to
 `dry_run=true`, so Claude previews and you confirm. Lead emails are masked unless asked for,
 and the server only reads files from the inbox folder.
+
+## Dashboard
+
+```bash
+streamlit run dashboard/app.py       # from the repo root, so .streamlit/config.toml applies
+```
+
+Six pages (Overview, Leads, Holo users, Website, AI visibility, Operations) built on the same
+report queries as the CLI and the MCP server, so every surface shows the same numbers. The
+event filter applies to lead figures, page and filter state are kept in the URL, and a
+sidebar switch toggles the light and dark themes. Unreviewed enrichment is shown as
+"in review", never as a fact.
 
 ## Measuring enrichment
 
@@ -141,7 +165,7 @@ Rules baseline on the 60-lead synthetic set (`evals/results_rules_baseline.json`
 
 | Persona | Intent | Language | All three | Sent to review | Auto-accepted, all correct |
 |---|---|---|---|---|---|
-| 0.90 | 0.83 | 1.00 | 0.75 | 62% | 100% |
+| 0.88 | 0.85 | 1.00 | 0.75 | 62% | 100% |
 
 Read that with care: the synthetic signups come from the same phrase templates the rules were
 written against, so the baseline looks better than it would on real people. The useful
@@ -152,8 +176,8 @@ rules alone leave most leads for a person, which is the case for the LLM.
 ## Development
 
 ```bash
-pip install -e ".[dev,dashboard]"
-pytest                 # 98 tests, no network, no keys
+pip install -e ".[dev,dashboard,ga4]"
+pytest                 # 123 tests, no network, no keys
 ruff check . && ruff format --check . && mypy holo_growth
 ```
 
@@ -167,13 +191,15 @@ holo_growth/
 ├── retention/      usage sources (Supabase, synthetic), lifecycle rules, CRM sync
 ├── content/        campaign briefs/templates, pre-send checks
 ├── geo/            providers, mention detection
-├── crm/            HubSpot client, local SQLite CRM
+├── crm/            HubSpot client, local SQLite CRM, consent → subscription outbox
+├── web/            GA4 traffic by source (and a synthetic source for the demo)
 ├── consent.py      append-only consent ledger
 ├── llm.py          Claude client with validated structured output
 ├── reports.py      SQL used by CLI, dashboard and MCP
 ├── mcp_server.py   MCP tools
 └── cli.py
 dashboard/app.py    Streamlit dashboard
+.streamlit/         dashboard themes (light and dark)
 integrations/       Holo migration, Claude MCP config
 ```
 
@@ -182,18 +208,15 @@ integrations/       Holo migration, Claude MCP config
 - All numbers in this repo are from synthetic data. The first real event will replace them.
 - Holo's "Not sure" outcome is stored the same way as "not answered yet", so pending
   validations are slightly overcounted.
-- HubSpot's own subscription types are the proper home for email consent. The `holo_*`
-  consent property mirrors the ledger for now; moving to the Communication Preferences API
-  is the next step.
-- GA4 conversion data (signup source on the Holo site) isn't wired into the funnel yet.
-
-## Built with
-
-Built with Claude Code as an AI pair programmer.
-
-<!-- TODO before publishing: replace this section with an honest account in your own words
-of what you designed, changed, reviewed and tested yourself. Only claim what is true. -->
-
-
+- Email subscriptions use HubSpot's single-contact v4 endpoint, one call per contact (the
+  batch endpoints need Marketing Hub Enterprise), so a very large first sync is slow. Tested
+  on a free HubSpot account in October 2026: subscribe, unsubscribe with the legal basis note,
+  and a repeat sync that sends nothing. If HubSpot ever refuses, consent stays on the property
+  and the outbox keeps the changes until it can send them.
+- GA4 reports totals per source, never people, so it can't say which lead came from where.
+  That needs the Holo app to store UTM parameters at signup for the growth engine to read.
+- GA4 is connected to a live property (service-account auth, Data API access and sync verified
+  in October 2026). Per-source numbers appear once GA4 has processed a day, usually within
+  24 to 48 hours.
 
 MIT licensed.
