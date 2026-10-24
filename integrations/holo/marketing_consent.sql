@@ -1,13 +1,10 @@
 -- ============================================================================
--- Proposed migration for the Holo app (run in Holo's Supabase, not here).
+-- Migration for the Holo app's Supabase project (not applied by this repository).
 --
--- Holo has no marketing consent today, so the growth engine treats every Holo
--- user as "never asked" and syncs nobody. This table records each change to a
--- user's marketing-email toggle. It is append-only: the latest row per user is
--- the current choice, and the history is the audit trail.
---
--- The app writes a row when the user flips the toggle in Profile settings.
--- The growth engine reads it with the service key (read-only).
+-- Append-only log of marketing-email consent changes. The latest row per user
+-- is the current choice; earlier rows form the audit trail. Written by the app
+-- when the user changes the setting in Profile; read by the growth engine with
+-- the service key. Until this table exists, all users are treated as not opted in.
 -- ============================================================================
 
 create table if not exists marketing_consents (

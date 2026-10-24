@@ -1,10 +1,9 @@
-"""Thin LLM layer.
+"""LLM client abstraction.
 
-Structured output uses forced tool use: the model must call a tool whose input
-schema is the Pydantic model's JSON schema, and the result is then validated
-with Pydantic again. A response that fails validation is retried once with the
-validation error fed back, then given up on (the caller decides what happens
-next; it never silently accepts bad output).
+Structured output uses forced tool use with the Pydantic model's JSON schema as the
+tool input schema, and the result is validated again with Pydantic. On validation
+failure the request is retried once with the error included, then LLMError is
+raised. Invalid output is never returned.
 """
 
 from __future__ import annotations
@@ -96,10 +95,10 @@ class AnthropicLLM:
 
 
 class ScriptedLLM:
-    """Deterministic stand-in for tests and offline demos.
+    """Deterministic LLM stand-in for tests and offline runs.
 
-    `structured_fn` and `text_fn` receive the prompt and return the payload, so
-    tests can script exact responses, including malformed ones.
+    `structured_fn` and `text_fn` map a prompt to a response payload, so tests can
+    script exact responses, including invalid ones.
     """
 
     name = "scripted"
@@ -127,7 +126,7 @@ class ScriptedLLM:
 
 
 def from_settings(settings: Any) -> LLM | None:
-    """Real client when a key is configured, otherwise None (callers fall back to rules)."""
+    """Return a client when an API key is configured, otherwise None (callers fall back to rules)."""
     if settings.use_real_llm:
         return AnthropicLLM(settings.anthropic_api_key, settings.anthropic_model)
     return None

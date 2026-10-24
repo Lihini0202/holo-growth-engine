@@ -1,4 +1,4 @@
-"""Reporting: plain SQL over the local store, shared by the CLI, MCP server and dashboard."""
+"""Report queries over the local store, shared by the CLI, MCP server and dashboard."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def recent_runs(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str, Any
 
 
 def event_funnel(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Per event: leads uploaded, hot leads, and how many later became Holo users."""
+    """Per-event funnel: leads, hot leads, leads in review, converted and active Holo users."""
     return _rows(
         conn,
         """
@@ -97,6 +97,84 @@ def geo_trend(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     )
 
 
+def lead_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """One row per lead with the funnel flags used by `event_funnel`, for event filtering.
+
+    Enrichment pending review is reported as 'in review', consistent with `persona_mix`.
+    """
+    return _rows(
+        conn,
+        """
+        SELECT l.email, l.first_name, l.last_name, l.source_event AS event,
+               CASE WHEN l.needs_review = 1 THEN 'in review' ELSE l.persona END  AS persona,
+               CASE WHEN l.needs_review = 1 THEN 'in review' ELSE l.intent END   AS intent,
+               CASE WHEN l.needs_review = 1 THEN 'in review' ELSE l.language END AS language,
+               l.score, l.needs_review,
+               CASE WHEN l.score >= 70 AND l.needs_review = 0 THEN 1 ELSE 0 END AS hot,
+               CASE WHEN lc.holo_user_id IS NOT NULL THEN 1 ELSE 0 END AS became_user,
+               CASE WHEN lc.stage IN ('activated', 'engaged') THEN 1 ELSE 0 END AS active_user
+        FROM leads l
+        LEFT JOIN lifecycle lc ON lc.email = l.email
+    """,
+    )
+
+
+def geo_answers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Answers from the latest GEO run, with competitors decoded."""
+    rows = _rows(
+        conn,
+        """
+        SELECT provider, prompt, mentioned, position, competitors, answer_excerpt, checked_at
+        FROM geo_results WHERE run_id = (SELECT MAX(run_id) FROM geo_results)
+        ORDER BY id
+    """,
+    )
+    for r in rows:
+        r["competitors"] = json.loads(r["competitors"] or "[]")
+    return rows
+
+
+def recent_drafts(conn: sqlite3.Connection, limit: int = 20) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        "SELECT id, segment, language, subject, status, created_at FROM drafts ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+
+
+def _web_window(days: int) -> str:
+    # The window is relative to the latest stored day, not the current date.
+    return f"day > date((SELECT MAX(day) FROM web_traffic), '-{int(days)} days')"
+
+
+def traffic_by_channel(conn: sqlite3.Connection, days: int = 28) -> list[dict[str, Any]]:
+    """Sessions and sign-ups per source / medium over the last `days` stored days."""
+    return _rows(
+        conn,
+        f"""
+        SELECT source, medium, SUM(sessions) AS sessions, SUM(signups) AS signups,
+               ROUND(100.0 * SUM(signups) / MAX(SUM(sessions), 1), 1) AS signup_rate_pct
+        FROM web_traffic WHERE {_web_window(days)}
+        GROUP BY source, medium ORDER BY signups DESC, sessions DESC
+    """,
+    )
+
+
+def traffic_daily(conn: sqlite3.Connection, days: int = 28) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        f"""
+        SELECT day, SUM(sessions) AS sessions, SUM(signups) AS signups
+        FROM web_traffic WHERE {_web_window(days)} GROUP BY day ORDER BY day
+    """,
+    )
+
+
+def traffic_provider(conn: sqlite3.Connection) -> str | None:
+    row = conn.execute("SELECT provider FROM web_traffic LIMIT 1").fetchone()
+    return str(row["provider"]) if row else None
+
+
 def row_issues(conn: sqlite3.Connection, run_id: int) -> list[dict[str, Any]]:
     return _rows(
         conn,
@@ -105,8 +183,12 @@ def row_issues(conn: sqlite3.Connection, run_id: int) -> list[dict[str, Any]]:
     )
 
 
+def _count(n: int, noun: str, rest: str) -> str:
+    return f"- {n} {noun}{'' if n == 1 else 's'} {rest}"
+
+
 def weekly_brief(conn: sqlite3.Connection) -> str:
-    """A markdown brief a growth lead can read in two minutes."""
+    """Render the weekly growth brief as Markdown."""
     lines = ["# Holo growth: weekly brief", ""]
     funnel = event_funnel(conn)
     lines.append("## Events")
@@ -117,6 +199,7 @@ def weekly_brief(conn: sqlite3.Connection) -> str:
             f"{f['active_users']} |"
             for f in funnel
         ]
+        lines += ["", "Each person counts once, under the first event they signed up at."]
     else:
         lines.append("No event leads processed yet.")
     lines += ["", "## Users by lifecycle stage"]
@@ -139,11 +222,29 @@ def weekly_brief(conn: sqlite3.Connection) -> str:
             )
     else:
         lines.append("No GEO checks yet.")
+    lines += ["", "## Website sign-ups by source (last 28 days)"]
+    channels = traffic_by_channel(conn)
+    if channels:
+        sessions = sum(c["sessions"] for c in channels)
+        signups = sum(c["signups"] for c in channels)
+        label = " Synthetic demo data." if traffic_provider(conn) == "synthetic" else ""
+        lines.append(
+            f"{sessions} sessions, {signups} sign-ups ({100 * signups / max(sessions, 1):.1f}%).{label}"
+        )
+        lines += [
+            f"- {c['source']} / {c['medium']}: {c['signups']} sign-ups from {c['sessions']} sessions "
+            f"({c['signup_rate_pct']}%)"
+            for c in channels[:5]
+        ]
+    else:
+        lines.append("No website data yet. Run `holo-growth web sync`.")
     reviews = open_reviews(conn, 500)
     lines += [
         "",
         "## Needs a human",
-        f"- {sum(1 for r in reviews if r['kind'] == 'enrichment')} leads with low-confidence enrichment",
-        f"- {sum(1 for r in reviews if r['kind'] == 'content')} email drafts that failed checks",
+        _count(
+            sum(1 for r in reviews if r["kind"] == "enrichment"), "lead", "with low-confidence enrichment"
+        ),
+        _count(sum(1 for r in reviews if r["kind"] == "content"), "email draft", "waiting for review"),
     ]
     return "\n".join(lines) + "\n"

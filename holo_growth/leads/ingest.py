@@ -1,8 +1,7 @@
-"""Read a signup export (CSV or Excel) and map its columns onto RawLead.
+"""Signup export ingestion (CSV or Excel) and column mapping onto RawLead.
 
-Every event tool names its columns differently ("Email Address", "E-mail",
-"email_id"...). Headers are normalised and matched against a synonym table, and
-anything unmapped is reported rather than silently dropped.
+Headers are normalised and matched against a synonym table. Unmapped columns are
+reported rather than silently dropped.
 """
 
 from __future__ import annotations
@@ -79,7 +78,7 @@ def map_headers(headers: list[str]) -> tuple[dict[str, str], list[str]]:
             if norm == fld.replace("_", " ") or norm in syns:
                 match = fld
                 break
-        if match is None:  # looser pass: header starts with a synonym ("Email (work)")
+        if match is None:  # Second pass: prefix match (e.g. "Email (work)")
             for fld, syns in SYNONYMS.items():
                 if fld not in taken and any(norm.startswith(s + " ") for s in syns):
                     match = fld
@@ -140,12 +139,12 @@ def ingest(path: Path | str) -> IngestResult:
         warnings.append("no email column found; every row will be rejected")
 
     leads: list[RawLead] = []
-    for i, row in enumerate(rows, start=2):  # row 1 is the header in a spreadsheet
+    for i, row in enumerate(rows, start=2):  # Row 1 is the header
         values: dict[str, str] = {}
         for original, fld in mapping.items():
             values[fld] = (row.get(original) or "").strip()
         if not any(values.values()):
-            continue  # blank line
+            continue  # Skip blank rows
         if not values.get("full_name"):
             first, last = values.pop("first_name", ""), values.pop("last_name", "")
             values["full_name"] = f"{first} {last}".strip()

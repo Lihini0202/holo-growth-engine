@@ -1,17 +1,16 @@
-"""Event lead pipeline: file in, clean consented contacts in the CRM, run report out.
+"""Event lead pipeline.
 
     ingest -> clean -> dedupe -> consent -> enrich -> score -> CRM upsert -> log
 
-Privacy choices:
-* Only people who ticked the marketing box are uploaded or stored. Everyone
-  else is counted in the run stats and then dropped (data minimisation).
-* A later unsubscribe always wins: re-importing an old sheet cannot re-grant
+Privacy:
+* Only contacts who opted in to marketing are uploaded or stored; others are
+  counted in the run statistics and discarded.
+* A later withdrawal always takes precedence; re-importing a sheet cannot re-grant
   consent (see ConsentLedger.record_if_changed).
-* Under-18 rows are discarded without storing their details.
+* Rows for minors are discarded without storing their details.
 
-Idempotency: the input file's hash is recorded. Re-running the same file is a
-no-op unless forced, and the CRM upsert is keyed on email anyway, so a forced
-re-run updates contacts instead of duplicating them.
+Idempotency: the input file hash is recorded and a repeated file is skipped unless
+forced. CRM upserts are keyed on email, so forced re-runs update existing contacts.
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ from pathlib import Path
 from holo_growth import db
 from holo_growth.consent import ConsentLedger, Purpose
 from holo_growth.crm.base import CRM
+from holo_growth.crm.subscriptions import sync_subscriptions
 from holo_growth.leads.clean import clean_row
 from holo_growth.leads.dedupe import dedupe
 from holo_growth.leads.enrich import Enricher, LLMEnricher
@@ -55,17 +55,19 @@ class LeadRunReport:
     issues: list[dict[str, object]] = field(default_factory=list)
     unmapped_columns: list[str] = field(default_factory=list)
     skipped_reason: str | None = None
+    subscriptions: str | None = None  # Result of the post-upload subscription sync
 
     def summary(self) -> str:
         if self.skipped_reason:
             return f"Run {self.run_id} skipped: {self.skipped_reason}"
-        return (
+        text = (
             f"{self.event}: {self.rows_read} rows read, {self.rejected} rejected, "
             f"{self.duplicates_merged} duplicates merged, {self.not_consented} without consent "
             f"(not uploaded). CRM: {self.uploaded_created} created, {self.uploaded_updated} "
             f"updated, {self.upload_failed} failed. {self.needs_review} sent to review, "
             f"{len(self.hot_leads)} hot leads."
         )
+        return f"{text} {self.subscriptions}" if self.subscriptions else text
 
 
 def _crm_properties(item: EnrichedLead, consent: bool) -> dict[str, str]:
@@ -147,7 +149,10 @@ def run_leads(
         for lead in unique:
             if not dry_run and lead.marketing_opt_in:
                 ledger.record_if_changed(lead.email, Purpose.MARKETING_EMAIL, True, f"event_form:{event}")
-            allowed = ledger.allowed(lead.email) if not dry_run else lead.marketing_opt_in
+            if dry_run:
+                allowed = ledger.allowed_after_signup(lead.email, lead.marketing_opt_in)
+            else:
+                allowed = ledger.allowed(lead.email)
             if allowed:
                 consented.append(lead)
             else:
@@ -204,6 +209,7 @@ def run_leads(
                     issues.append(RowIssue(row_number=0, field="crm", problem=err[:200], value=email))
             failed_emails = {i.value for i in issues if i.field == "crm"}
             _persist(conn, run_id, items, failed_emails)
+            report.subscriptions = sync_subscriptions(conn, crm).summary()
             report.status = "partial" if report.upload_failed else "ok"
 
         for issue in issues:

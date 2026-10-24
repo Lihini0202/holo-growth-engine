@@ -1,15 +1,14 @@
 """GEO (generative engine optimisation) tracker.
 
-Asks AI assistants the questions Holo's users would ask, and records whether
-Holo is mentioned, in what position relative to competitors, and which
-competitors come up instead. Run weekly, the trend is the useful number: one
-answer is noise, mention rate over many prompts and weeks is signal.
+Queries AI assistants with Holo-relevant prompts and records whether Holo is
+mentioned, its position relative to competitors, and which competitors are named.
+Mention rate is meaningful as a trend across prompts and scheduled runs, not per
+answer.
 
 Providers:
 * AnthropicProvider: Claude via the Anthropic API.
-* OpenRouterProvider: any model on OpenRouter (Holo already uses OpenRouter for
-  its reply coach), e.g. openai/gpt-5, google/gemini-3-pro.
-* CannedProvider: fixed demo answers, clearly labelled, for offline runs.
+* OpenRouterProvider: any OpenRouter model (e.g. openai/gpt-5, google/gemini-3-pro).
+* CannedProvider: fixed answers for offline runs, labelled 'demo'.
 """
 
 from __future__ import annotations
@@ -69,7 +68,7 @@ class OpenRouterProvider:
 
 
 class CannedProvider:
-    """Offline demo answers. Results are tagged 'demo' so they never pass as real data."""
+    """Fixed offline answers. Results are labelled 'demo' to keep them distinct from real data."""
 
     name = "demo"
 
@@ -121,7 +120,7 @@ def detect(answer: str, cfg: GeoConfig) -> Mention:
     hits: list[tuple[int, str]] = []
     brand_at = None
     for pattern in cfg.brand_patterns:
-        m = re.search(pattern, answer)  # case-sensitive: "holo" in prose is rarely the brand
+        m = re.search(pattern, answer)  # Case-sensitive: lowercase "holo" is usually not the brand name.
         if m and (brand_at is None or m.start() < brand_at):
             brand_at = m.start()
     if brand_at is not None:
@@ -170,7 +169,7 @@ def run_geo(conn: sqlite3.Connection, providers: list[Provider], cfg: GeoConfig 
         for prompt in cfg.prompts:
             try:
                 answer = provider.ask(prompt)
-            except Exception as exc:  # one provider failing must not stop the run
+            except Exception as exc:  # Isolate provider failures; continue with the remaining providers.
                 report.errors += 1
                 log.warning(
                     "GEO provider failed", extra={"provider": provider.name, "error": type(exc).__name__}

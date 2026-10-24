@@ -1,7 +1,7 @@
-"""Runtime configuration, read from environment variables.
+"""Runtime configuration from environment variables.
 
-Nothing secret has a default. Every external integration has an offline
-fallback, so the whole system runs (and is tested) without any API keys.
+Secrets have no defaults. Each external integration falls back to an offline
+implementation when its credentials are not set.
 """
 
 from __future__ import annotations
@@ -26,17 +26,25 @@ class Settings:
     # CRM
     hubspot_token: str = field(default_factory=lambda: _env("HUBSPOT_PRIVATE_APP_TOKEN"))
     hubspot_base_url: str = field(default_factory=lambda: _env("HUBSPOT_BASE_URL", "https://api.hubapi.com"))
+    # HubSpot subscription type for marketing-email consent (see `holo-growth consent types`).
+    # When unset, consent is written only to the holo_marketing_consent contact property.
+    hubspot_subscription_id: str = field(default_factory=lambda: _env("HUBSPOT_SUBSCRIPTION_ID"))
 
-    # Holo product data (read-only, used for lifecycle stages)
+    # GA4 Data API (read-only, aggregate traffic by source)
+    ga4_property_id: str = field(default_factory=lambda: _env("GA4_PROPERTY_ID"))
+    ga4_credentials_file: str = field(default_factory=lambda: _env("GA4_CREDENTIALS_FILE"))
+    ga4_signup_event: str = field(default_factory=lambda: _env("GA4_SIGNUP_EVENT", "sign_up"))
+
+    # Holo product data (read-only; lifecycle stages)
     supabase_url: str = field(default_factory=lambda: _env("HOLO_SUPABASE_URL"))
     supabase_key: str = field(default_factory=lambda: _env("HOLO_SUPABASE_SERVICE_KEY"))
 
-    # Enrichment results below this confidence go to the human review queue.
+    # Enrichments below this confidence are routed to the review queue.
     review_threshold: float = field(
         default_factory=lambda: float(_env("HOLO_GROWTH_REVIEW_THRESHOLD", "0.7"))
     )
 
-    # Only links to these domains may appear in campaign copy.
+    # Domains permitted in campaign copy links.
     link_domains: frozenset[str] = field(
         default_factory=lambda: frozenset(
             d.strip().lower()
@@ -54,12 +62,16 @@ class Settings:
         return bool(self.hubspot_token)
 
     @property
+    def use_real_ga4(self) -> bool:
+        return bool(self.ga4_property_id and self.ga4_credentials_file)
+
+    @property
     def use_real_holo(self) -> bool:
         return bool(self.supabase_url and self.supabase_key)
 
 
 def load_dotenv(path: Path = Path(".env")) -> None:
-    """Minimal .env loader. Real environment variables always win."""
+    """Load KEY=VALUE pairs from a .env file. Existing environment variables take precedence."""
     if not path.is_file():
         return
     for line in path.read_text(encoding="utf-8").splitlines():

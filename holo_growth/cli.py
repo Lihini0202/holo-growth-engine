@@ -1,9 +1,10 @@
-"""Command line: `holo-growth --help`."""
+"""Command-line interface (`holo-growth`)."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -20,6 +21,7 @@ geo_app = typer.Typer(help="Track how Holo shows up in AI answers.", no_args_is_
 review_app = typer.Typer(help="Human review queue.", no_args_is_help=True)
 consent_app = typer.Typer(help="Consent ledger.", no_args_is_help=True)
 report_app = typer.Typer(help="Reports.", no_args_is_help=True)
+web_app = typer.Typer(help="Website traffic and sign-ups by source (GA4).", no_args_is_help=True)
 eval_app = typer.Typer(help="Evaluate enrichment quality.", no_args_is_help=True)
 for name, sub in [
     ("leads", leads_app),
@@ -29,6 +31,7 @@ for name, sub in [
     ("review", review_app),
     ("consent", consent_app),
     ("report", report_app),
+    ("web", web_app),
     ("eval", eval_app),
 ]:
     app.add_typer(sub, name=name)
@@ -47,7 +50,7 @@ def _print_json(data: object) -> None:
 
 @app.command()
 def status() -> None:
-    """Show which integrations are live and which are running offline."""
+    """Show whether each integration is running live or offline."""
     _print_json(_services().mode())
 
 
@@ -95,9 +98,9 @@ def leads_process(
 
 @leads_app.command("sample")
 def leads_sample(
-    out: Path = typer.Argument(Path("samples/campus_launch_signups.csv")), rows: int = 120, seed: int = 7
+    out: Path = typer.Argument(Path("samples/event_signups.csv")), rows: int = 120, seed: int = 7
 ) -> None:
-    """Write a deliberately messy synthetic signup sheet to try the pipeline on."""
+    """Generate a synthetic signup sheet with realistic data-quality issues."""
     from holo_growth.synthetic import make_event_file
 
     typer.echo(f"Wrote {make_event_file(out, rows, seed)}")
@@ -198,22 +201,66 @@ def review_reject(review_id: int) -> None:
 
 @consent_app.command("withdraw")
 def consent_withdraw(email: str, source: str = "manual") -> None:
-    """Record an unsubscribe for every purpose and mark the CRM contact opted out."""
+    """Withdraw consent for all purposes; notify the CRM only if consent was previously granted."""
     from holo_growth.consent import ConsentLedger
+    from holo_growth.crm.subscriptions import sync_subscriptions
 
     s = _services()
-    ConsentLedger(s.conn).withdraw(email, source)
+    ledger = ConsentLedger(s.conn)
+    ledger.withdraw(email, source)
+    typer.echo(f"{email} withdrawn from all purposes.")
+    if not ledger.withdrew_after_grant(email):
+        typer.echo("They never opted in, so nothing is sent to the CRM.")
+        sync_subscriptions(s.conn, s.crm)  # Mark the event as processed without a CRM push.
+        return
     s.crm.upsert_contacts(
         [{"email": email.lower(), "holo_marketing_consent": "false", "holo_lifecycle_stage": "opted_out"}]
     )
-    typer.echo(f"{email} withdrawn from all purposes.")
+    typer.echo(sync_subscriptions(s.conn, s.crm).summary())
+
+
+@consent_app.command("sync")
+def consent_sync() -> None:
+    """Push pending consent changes to the CRM's email subscription status."""
+    from holo_growth.crm.subscriptions import sync_subscriptions
+
+    s = _services()
+    typer.echo(sync_subscriptions(s.conn, s.crm).summary())
+
+
+@consent_app.command("types")
+def consent_types() -> None:
+    """List HubSpot subscription types and their IDs (for HUBSPOT_SUBSCRIPTION_ID)."""
+    s = _services()
+    if not hasattr(s.crm, "subscription_definitions"):
+        typer.echo("No HubSpot token set: the local CRM has a single built-in subscription.")
+        return
+    for d in s.crm.subscription_definitions():
+        flag = "" if d.get("isActive", True) else "  (inactive)"
+        typer.echo(f"{d.get('id'):<12} {d.get('name')}  [{d.get('purpose', '')}]{flag}")
 
 
 @consent_app.command("show")
 def consent_show(email: str) -> None:
+    """Show the consent event history for an email address."""
     from holo_growth.consent import ConsentLedger
 
     _print_json(ConsentLedger(_services().conn).history(email))
+
+
+# -- web ---------------------------------------------------------------------
+
+
+@web_app.command("sync")
+def web_sync(
+    days: int = typer.Option(28, min=1, max=365, help="How many days back, ending yesterday"),
+    synthetic: bool = typer.Option(False, help="Use synthetic traffic even if GA4 is configured"),
+) -> None:
+    """Sync daily sessions and sign-ups by traffic source from GA4."""
+    from holo_growth.web.traffic import run_web_sync
+
+    s = _services()
+    typer.echo(run_web_sync(s.conn, s.traffic_source(synthetic=synthetic), days).summary())
 
 
 # -- reports -----------------------------------------------------------------
@@ -221,7 +268,7 @@ def consent_show(email: str) -> None:
 
 @report_app.command("brief")
 def report_brief(out: Path | None = None) -> None:
-    """Weekly growth brief in markdown."""
+    """Print or write the weekly growth brief (Markdown)."""
     text = reports.weekly_brief(_services().conn)
     if out:
         out.write_text(text, encoding="utf-8")
@@ -244,7 +291,7 @@ def eval_enrichment(
     file: Path = typer.Argument(Path("evals/enrichment_labelled.csv")),
     out: Path | None = typer.Option(None, help="Write results JSON here"),
 ) -> None:
-    """Score the rules baseline (and the LLM, if a key is set) on the labelled set."""
+    """Evaluate the rules baseline, and the LLM when configured, against the labelled set."""
     from holo_growth.evaluation import evaluate
     from holo_growth.leads.enrich import LLMEnricher, RuleEnricher
 
@@ -269,7 +316,7 @@ def eval_enrichment(
 
 @app.command()
 def demo(db_path: Path = typer.Option(Path("demo.db"), help="Fresh database for the demo")) -> None:
-    """Run the whole system end to end on synthetic data. No keys needed."""
+    """Run every component end to end on synthetic data. No credentials required."""
     os.environ["HOLO_GROWTH_DB"] = str(db_path)
     if db_path.exists():
         db_path.unlink()
@@ -278,13 +325,15 @@ def demo(db_path: Path = typer.Option(Path("demo.db"), help="Fresh database for 
     from holo_growth.leads.pipeline import make_enricher, run_leads
     from holo_growth.retention.sync import run_retention
     from holo_growth.synthetic import make_event_file
+    from holo_growth.web.traffic import run_web_sync
 
     s = _services()
     typer.echo(f"Mode: {json.dumps(s.mode())}\n")
 
-    events = [("Campus Launch - University of Moratuwa", 7), ("Colombo Tech Meetup", 21)]
+    events = [("Online Dating Safety Workshop - Colombo", 7), ("Colombo Tech Meetup", 21)]
     for name, seed in events:
-        f = make_event_file(Path("samples") / f"{name.split(' - ')[-1].replace(' ', '_')}.csv", 110, seed)
+        slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+        f = make_event_file(Path("samples") / f"{slug}.csv", 110, seed)
         r = run_leads(f, name, s.conn, s.crm, make_enricher(s.llm), s.settings.review_threshold)
         typer.echo(f"[leads] {r.summary()}")
 
@@ -301,7 +350,10 @@ def demo(db_path: Path = typer.Option(Path("demo.db"), help="Fresh database for 
     typer.echo(f"[content] at_risk/si: {d.status} ({'; '.join(d.errors)})")
 
     g = run_geo(s.conn, providers_from_env(s.settings, s.llm))
-    typer.echo(f"[geo] {g.summary()}\n")
+    typer.echo(f"[geo] {g.summary()}")
+
+    w = run_web_sync(s.conn, s.traffic_source(synthetic=True))
+    typer.echo(f"[web] {w.summary()}\n")
     typer.echo(reports.weekly_brief(s.conn))
 
 

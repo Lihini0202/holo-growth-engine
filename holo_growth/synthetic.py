@@ -1,10 +1,9 @@
-"""Synthetic data for demos, tests and the enrichment eval.
+"""Synthetic data for demos, tests and the enrichment evaluation.
 
-All people here are fictional. Messiness is injected on purpose: header
-variations, typos in email domains, mixed phone formats, duplicates, blank
-rows, minors, disposable emails and a prompt-injection attempt in free text.
-Every lead carries its true persona/intent/language, which is what makes the
-labelled eval set possible.
+All records are fictional. Generated sheets include common data-quality issues:
+header variants, email domain typos, mixed phone formats, duplicates, blank rows,
+minors, disposable emails and a prompt-injection attempt. Each lead carries its
+true labels for the evaluation set.
 """
 
 from __future__ import annotations
@@ -59,27 +58,24 @@ LAST = [
     "Dissanayake",
     "Ratnayake",
 ]
-UNIS = [
-    "University of Moratuwa",
-    "SLIIT",
-    "University of Colombo",
-    "NSBM Green University",
-    "IIT Campus",
-    "University of Peradeniya",
-    "KDU",
-    "University of Sri Jayewardenepura",
+# Fictional organisations only; no real institution or employer is named.
+SCHOOLS = [
+    "Lakeview Institute of Technology",
+    "Northfield College",
+    "Harbor City Academy",
+    "Greenwood School of Design",
+    "Riverside Business School",
+    "Eastgate College",
 ]
 COMPANIES = [
-    "WSO2",
-    "Virtusa",
-    "IFS",
-    "Dialog Axiata PLC",
-    "MAS Holdings",
-    "Brandix",
-    "HSBC Sri Lanka",
-    "Sysco LABS",
-    "LSEG Technology",
-    "John Keells Holdings PLC",
+    "Northwind Labs",
+    "Bluepeak Systems (Pvt) Ltd",
+    "Coralline Studios",
+    "Tidewater Apparel PLC",
+    "Sunrise Finance",
+    "Harborline Logistics",
+    "Kestrel Software",
+    "Meridian Bank",
 ]
 CITIES = [
     "Colombo",
@@ -98,10 +94,10 @@ HEARD = [
     "Instagram",
     "a friend",
     "friend told me",
-    "Campus poster",
+    "Event poster",
     "TikTok",
     "LinkedIn",
-    "Walked past the stall",
+    "Walked past the booth",
     "",
     "Referral from a friend",
 ]
@@ -162,11 +158,11 @@ def _phone(rng: random.Random) -> str:
 
 def make_lead(rng: random.Random) -> SyntheticLead:
     first, last = rng.choice(FIRST), rng.choice(LAST)
-    persona = rng.choices(["student", "young_professional", "other"], [0.55, 0.35, 0.10])[0]
+    persona = rng.choices(["young_adult", "young_professional", "other"], [0.55, 0.35, 0.10])[0]
     intent = rng.choices(["high", "medium", "low"], [0.3, 0.4, 0.3])[0]
     language = rng.choices(["en", "si", "ta"], [0.7, 0.2, 0.1])[0]
-    if persona == "student":
-        org, age = rng.choice(UNIS), rng.randint(19, 24)
+    if persona == "young_adult":
+        org, age = rng.choice(SCHOOLS), rng.randint(19, 24)
     elif persona == "young_professional":
         org, age = rng.choice(COMPANIES), rng.randint(23, 32)
     else:
@@ -185,7 +181,7 @@ def make_lead(rng: random.Random) -> SyntheticLead:
         "Name": name,
         "Email Address": email,
         "Mobile": _phone(rng) if rng.random() < 0.8 else "",
-        "University / Workplace": org,
+        "School / Workplace": org,
         "City": rng.choice(CITIES),
         "Age": str(age),
         "How did you hear about us?": rng.choice(HEARD),
@@ -199,12 +195,12 @@ def make_lead(rng: random.Random) -> SyntheticLead:
 
 
 def make_event_file(path: Path, n: int = 120, seed: int = 7) -> Path:
-    """Write a deliberately messy event signup CSV."""
+    """Write a synthetic event signup CSV with injected data-quality issues."""
     rng = random.Random(seed)
     leads = [make_lead(rng) for _ in range(n)]
     rows = [lead.row for lead in leads]
 
-    for _ in range(max(2, n // 12)):  # same person signed up twice, slightly differently
+    for _ in range(max(2, n // 12)):  # Duplicate signup with minor variations
         dup = dict(rng.choice(rows))
         dup["Email Address"] = dup["Email Address"].strip().upper()
         dup["Mobile"] = ""
@@ -225,12 +221,12 @@ def make_event_file(path: Path, n: int = 120, seed: int = 7) -> Path:
             "Email Address": "injector.test@gmail.com",
             "What brings you to Holo?": INJECTION,
             "Send me Holo updates": "Yes",
-            "University / Workplace": "",
+            "School / Workplace": "",
             "Age": "29",
         }
     )
     rows.append(injector)
-    rows.append({k: "" for k in rows[0]})  # blank line from the form export
+    rows.append({k: "" for k in rows[0]})  # Blank row
     rng.shuffle(rows)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +238,7 @@ def make_event_file(path: Path, n: int = 120, seed: int = 7) -> Path:
 
 
 def make_eval_set(path: Path, n: int = 60, seed: int = 101) -> Path:
-    """Labelled leads for measuring enrichment accuracy (columns + true labels)."""
+    """Labelled leads for the enrichment evaluation (input columns and true labels)."""
     rng = random.Random(seed)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -269,17 +265,17 @@ class SyntheticHoloUser:
     email: str
     first_name: str
     signed_up: datetime
-    analyses: list[tuple[datetime, bool | None]]  # (created_at, outcome recorded?)
+    analyses: list[tuple[datetime, bool | None]]  # (created_at, outcome recorded)
     marketing_opt_in: bool
 
 
 def make_holo_users(
     n: int = 200, seed: int = 11, now: datetime | None = None, convert_emails: list[str] | None = None
 ) -> list[SyntheticHoloUser]:
-    """Product-usage history shaped like Holo's analysis_logs table.
+    """Product-usage history in the shape of Holo's analysis_logs table.
 
-    `convert_emails` simulates event leads who later created a Holo account, so
-    the event-to-user funnel has something to show in a demo.
+    `convert_emails` marks event leads that later created a Holo account, populating
+    the event-to-user funnel.
     """
     rng = random.Random(seed)
     now = now or datetime.now(UTC)

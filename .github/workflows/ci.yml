@@ -26,7 +26,7 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install
-        run: pip install -e ".[dev,dashboard]"
+        run: pip install -e ".[dev,dashboard,ga4]"
 
       - name: Lint
         run: |
@@ -36,9 +36,8 @@ jobs:
       - name: Type-check
         run: mypy holo_growth
 
-      # No secrets are configured in CI on purpose: every external API is
-      # mocked (respx) or replaced by an offline fallback, so tests are free,
-      # deterministic and safe to run on pull requests from forks.
+      # No secrets in CI: external APIs are mocked (respx) or replaced by offline
+      # fallbacks, so tests are deterministic and safe for pull requests from forks.
       - name: Test
         run: pytest --cov=holo_growth --cov-report=term --cov-fail-under=80
 

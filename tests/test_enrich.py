@@ -20,20 +20,20 @@ def lead(**kw):
 
 
 GOOD = {
-    "persona": "student",
+    "persona": "young_adult",
     "intent": "high",
     "language": "en",
     "interests": ["ghosting"],
     "confidence": 0.9,
-    "rationale": "student who keeps getting ghosted",
+    "rationale": "young adult who keeps getting ghosted",
 }
 
 
-def test_rules_student_high_intent():
+def test_rules_young_adult_high_intent():
     e = RuleEnricher().enrich(
-        lead(organisation="University of Moratuwa", reason="I keep getting ghosted, need this")
+        lead(organisation="Northfield College", reason="I keep getting ghosted, need this")
     )
-    assert (e.persona, e.intent, e.language) == (Persona.STUDENT, Intent.HIGH, Language.EN)
+    assert (e.persona, e.intent, e.language) == (Persona.YOUNG_ADULT, Intent.HIGH, Language.EN)
     assert "ghosting" in e.interests
 
 
@@ -58,7 +58,7 @@ def test_llm_result_is_used_when_valid():
 def test_invalid_llm_output_falls_back_to_rules_and_is_sent_to_review():
     llm = ScriptedLLM(structured_fn=lambda p: {**GOOD, "persona": "astronaut"})
     enricher = LLMEnricher(llm)
-    e = enricher.enrich(lead(organisation="SLIIT", reason="I keep getting ghosted"))
+    e = enricher.enrich(lead(organisation="Harbor City Academy", reason="I keep getting ghosted"))
     assert enricher.last_source == "rules_fallback"
     assert e.confidence <= 0.5  # never auto-accepted
 
@@ -97,7 +97,7 @@ def test_anthropic_client_retries_once_with_validation_error():
 
 
 def test_score_is_explained():
-    e = Enrichment(persona="student", intent="high", language="en", interests=["safety"], confidence=0.9)
+    e = Enrichment(persona="young_adult", intent="high", language="en", interests=["safety"], confidence=0.9)
     points, reasons = score(lead(phone="+94771234567", heard_from="a friend"), e)
     assert points == 100
     assert any("referral" in r for r in reasons)

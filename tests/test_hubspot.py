@@ -78,6 +78,32 @@ def test_partial_multi_status_errors_are_reported(hs):
 
 
 @respx.mock
+def test_ensure_properties_adds_missing_options_and_keeps_existing(hs):
+    respx.post(f"{BASE}/crm/v3/properties/contacts/groups").mock(return_value=httpx.Response(409, json={}))
+    for p in CUSTOM_PROPERTIES:
+        body = {}
+        if p["name"] == "holo_persona":  # created by an earlier version with a retired option
+            body = {
+                "options": [
+                    {"label": "Student", "value": "student", "displayOrder": 0, "hidden": False},
+                    {"label": "Other", "value": "other", "displayOrder": 1, "hidden": False},
+                ]
+            }
+        elif "options" in p:
+            body = {"options": [{"value": v} for v in p["options"]]}
+        respx.get(f"{BASE}/crm/v3/properties/contacts/{p['name']}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+    update = respx.patch(f"{BASE}/crm/v3/properties/contacts/holo_persona").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    hs.ensure_properties()
+    assert update.call_count == 1  # only the property with missing options is touched
+    values = [o["value"] for o in json.loads(update.calls[0].request.content)["options"]]
+    assert values == ["student", "other", "young_adult", "young_professional"]
+
+
+@respx.mock
 def test_gives_up_after_max_attempts(hs):
     respx.get(f"{BASE}/crm/v3/properties/contacts/x").mock(return_value=httpx.Response(503))
     with pytest.raises(HubSpotError):
@@ -95,6 +121,9 @@ def test_ensure_properties_creates_only_missing(hs):
             return_value=httpx.Response(status, json={})
         )
     create = respx.post(f"{BASE}/crm/v3/properties/contacts").mock(return_value=httpx.Response(201, json={}))
+    respx.patch(f"{BASE}/crm/v3/properties/contacts/holo_persona").mock(
+        return_value=httpx.Response(200, json={})
+    )
     hs.ensure_properties()
     created = [json.loads(c.request.content)["name"] for c in create.calls]
     assert "holo_persona" not in created

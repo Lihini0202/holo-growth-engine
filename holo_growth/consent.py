@@ -1,14 +1,13 @@
-"""Consent ledger.
+"""Append-only consent ledger.
 
-Append-only: every grant or withdrawal is an event with its source, and the
-current state is the latest event per (email, purpose). That gives an audit
-trail of when and how someone opted in, which is what a regulator (or a user)
-will ask for.
+Each grant or withdrawal is stored as an event with its source and timestamp. The
+current state is the latest event per (email, purpose); the event history is the
+audit trail.
 
-Rules enforced here:
-* No consent record means no marketing. Silence is not consent.
-* A withdrawal always wins over an older grant, from any source.
-* Purposes are separate: product updates do not imply marketing email.
+Invariants:
+* No record means no consent.
+* A withdrawal overrides any earlier grant, regardless of source.
+* Purposes are independent: product updates do not imply marketing email.
 """
 
 from __future__ import annotations
@@ -37,13 +36,12 @@ class ConsentLedger:
     def record_if_changed(
         self, email: str, purpose: Purpose, granted: bool, source: str, at: datetime | None = None
     ) -> bool:
-        """Record only if it changes the current state. Returns True if recorded.
+        """Record an event only if it changes the current state. Returns True if recorded.
 
-        A grant can only override an existing withdrawal when it carries a
-        timestamp later than that withdrawal (a user re-enabling the toggle in
-        the app). A re-imported signup sheet or a stale app value has no such
-        timestamp, so it can never re-grant consent to someone who
-        unsubscribed. Withdrawals are always recorded.
+        A grant overrides an existing withdrawal only when it carries a timestamp later
+        than the withdrawal (an explicit in-app opt-in). Undated grants, such as a
+        re-imported signup sheet, never override a withdrawal. Withdrawals are always
+        recorded.
         """
         current = self.state(email, purpose)
         if current is granted:
@@ -74,11 +72,21 @@ class ConsentLedger:
     def allowed(self, email: str, purpose: Purpose = Purpose.MARKETING_EMAIL) -> bool:
         return self.state(email, purpose) is True
 
-    def withdrew_after_grant(self, email: str, purpose: Purpose = Purpose.MARKETING_EMAIL) -> bool:
-        """True if the current state is withdrawn and consent was granted at some point.
+    def allowed_after_signup(
+        self, email: str, opted_in: bool, purpose: Purpose = Purpose.MARKETING_EMAIL
+    ) -> bool:
+        """Return what `allowed` would return after an undated sheet opt-in, without writing.
 
-        Distinguishes "unsubscribed" (must be told to the CRM so workflows stop)
-        from "never said yes" (must never reach the CRM at all).
+        Used by dry runs so that previews match the real run.
+        """
+        current = self.state(email, purpose)
+        return current is True or (current is None and opted_in)
+
+    def withdrew_after_grant(self, email: str, purpose: Purpose = Purpose.MARKETING_EMAIL) -> bool:
+        """Return True if consent is currently withdrawn and was granted at some point.
+
+        Distinguishes an unsubscribe, which must be propagated to the CRM, from a contact
+        who never opted in and must never be sent to the CRM.
         """
         if self.state(email, purpose) is not False:
             return False

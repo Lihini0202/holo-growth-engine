@@ -1,9 +1,8 @@
-"""Deduplicate leads within a file.
+"""Within-file lead deduplication.
 
-Email is the identity key (it is also HubSpot's upsert key). Rows sharing an
-email are merged field by field. Rows sharing a phone number but not an email
-are kept apart and flagged: two people can share a family phone, so merging
-them automatically would be a guess.
+Email is the identity key (also the HubSpot upsert key); rows sharing an email are
+merged field by field. Rows sharing only a phone number are flagged, not merged,
+because a shared phone does not establish identity.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ def _merge(a: Lead, b: Lead) -> Lead:
     data = a.model_dump()
     for key, value in b.model_dump().items():
         if key == "marketing_opt_in":
-            # Conflicting answers from the same person: take the conservative one.
+            # On conflicting answers, keep the more conservative value.
             data[key] = a.marketing_opt_in and b.marketing_opt_in
         elif key == "row_number":
             continue

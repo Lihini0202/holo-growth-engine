@@ -2,8 +2,8 @@
   {
     "enricher": "rules",
     "n": 60,
-    "persona_accuracy": 0.9,
-    "intent_accuracy": 0.833,
+    "persona_accuracy": 0.883,
+    "intent_accuracy": 0.85,
     "language_accuracy": 1.0,
     "all_three_correct": 0.75,
     "review_rate": 0.617,

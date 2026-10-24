@@ -1,7 +1,8 @@
-"""SQLite storage for runs, leads, consent, review queue, drafts and GEO results.
+"""SQLite storage for runs, leads, consent events, review items, drafts, GEO results
+and web traffic.
 
-SQLite keeps the project zero-setup. The schema is plain SQL, so moving it to
-Postgres is a connection-string change plus swapping AUTOINCREMENT for IDENTITY.
+The schema is portable SQL; a Postgres migration requires replacing AUTOINCREMENT
+with IDENTITY.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind          TEXT NOT NULL,              -- leads | retention | content | geo
+    kind          TEXT NOT NULL,              -- leads | retention | content | geo | web
     label         TEXT,                       -- event name, campaign, etc.
     input_hash    TEXT,                       -- sha256 of the input file, for idempotency
     started_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -54,6 +55,30 @@ CREATE TABLE IF NOT EXISTS consent_events (
     recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_consent_email ON consent_events(email, purpose, id);
+
+-- Daily sessions and sign-ups by traffic source (GA4 aggregates; no per-user data).
+CREATE TABLE IF NOT EXISTS web_traffic (
+    day        TEXT NOT NULL,                 -- YYYY-MM-DD
+    source     TEXT NOT NULL,
+    medium     TEXT NOT NULL,
+    campaign   TEXT NOT NULL,
+    sessions   INTEGER NOT NULL,
+    signups    INTEGER NOT NULL,
+    provider   TEXT NOT NULL,                 -- ga4 | synthetic
+    synced_run INTEGER REFERENCES runs(id),
+    PRIMARY KEY (day, source, medium, campaign)
+);
+
+-- Subscription outbox: last processed consent event per email.
+-- pushed = 0: intentionally not sent (consent never granted).
+CREATE TABLE IF NOT EXISTS consent_crm_sync (
+    email      TEXT NOT NULL,
+    purpose    TEXT NOT NULL,
+    event_id   INTEGER NOT NULL,
+    pushed     INTEGER NOT NULL,
+    synced_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (email, purpose)
+);
 
 CREATE TABLE IF NOT EXISTS review_queue (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,6 +1,7 @@
-"""Lead score: a transparent points system the growth team can read and argue with.
+"""Lead scoring: a transparent, additive points table.
 
-Kept as data rather than code so a non-engineer can change weights in a PR.
+Weights are defined as data so they can be reviewed and adjusted without logic
+changes.
 """
 
 from __future__ import annotations
@@ -9,14 +10,14 @@ from holo_growth.models import Enrichment, Intent, Lead, Persona
 
 INTENT_POINTS: dict[Intent, int] = {Intent.HIGH: 40, Intent.MEDIUM: 20, Intent.LOW: 0}
 PERSONA_POINTS: dict[Persona, int] = {
-    Persona.STUDENT: 15,
+    Persona.YOUNG_ADULT: 15,
     Persona.YOUNG_PROFESSIONAL: 15,
     Persona.OTHER: 5,
 }
 OPTED_IN = 20
 HAS_PHONE = 5
-REFERRAL = 10  # heard about Holo from a friend: the strongest acquisition channel
-CORE_INTEREST = 10  # ghosting or safety
+REFERRAL = 10  # Referred by a friend
+CORE_INTEREST = 10  # Interest in ghosting detection or safety
 
 HOT_THRESHOLD = 70
 

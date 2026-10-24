@@ -1,16 +1,17 @@
-"""MCP server: lets anyone on the team run the growth engine by asking Claude.
+"""MCP server exposing the growth engine as tools over stdio.
 
-    "Process the signup sheet from Saturday's Moratuwa event"
+Example requests:
+    "Process the signup sheet from Saturday's safety workshop"
     "Who are the hottest leads from the tech meetup?"
     "Write the at-risk email and check it"
     "Give me this week's growth brief"
 
-Runs over stdio. Add it to Claude Desktop or Claude Code with:
+Client configuration:
 
     {"mcpServers": {"holo-growth": {"command": "holo-growth-mcp"}}}
 
-Safety: tools that write to the CRM default to dry_run=True, so the assistant
-previews first and a person confirms. Lead emails are masked unless asked for.
+Tools that write to the CRM default to dry_run=True. Lead emails are masked unless
+explicitly requested.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ def _mask(email: str) -> str:
 
 
 def _allowed_upload_path(file_path: str) -> Path:
-    """Only files inside HOLO_GROWTH_INBOX (default ./inbox) may be read."""
+    """Resolve a signup file inside HOLO_GROWTH_INBOX (default ./inbox); reject anything else."""
     inbox = Path(os.environ.get("HOLO_GROWTH_INBOX", "inbox")).resolve()
     path = Path(file_path)
     path = (path if path.is_absolute() else inbox / path).resolve()
@@ -176,7 +177,7 @@ def weekly_growth_brief() -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 def review_queue() -> list[dict[str, Any]]:
-    """Items waiting for a person: low-confidence enrichments and drafts that failed checks."""
+    """Items waiting for a person: low-confidence enrichments and drafts that need review."""
     rows = reports.open_reviews(_svc().conn)
     for r in rows:
         if "@" in r["ref"]:

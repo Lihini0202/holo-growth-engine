@@ -1,4 +1,4 @@
-"""Structured JSON logging, so runs can be shipped to any log backend and grepped."""
+"""Structured JSON logging."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def configure(level: str = "INFO") -> None:
     root = logging.getLogger()
     if any(isinstance(h.formatter, JsonFormatter) for h in root.handlers):
         return
-    handler = logging.StreamHandler(sys.stderr)  # stdout is reserved for MCP stdio
+    handler = logging.StreamHandler(sys.stderr)  # stdout is reserved for the MCP stdio transport
     handler.setFormatter(JsonFormatter())
     root.handlers = [handler]
     root.setLevel(level)

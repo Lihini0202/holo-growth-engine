@@ -1,8 +1,8 @@
 name: Weekly growth run
 
-# Every Monday 08:00 Sri Lanka time (02:30 UTC): sync lifecycle stages, run the
-# GEO check and publish the brief as a workflow artifact. Only runs when the
-# repository has the secrets configured; otherwise it exits cleanly.
+# Weekly run, Mondays 08:00 Asia/Colombo (02:30 UTC): lifecycle and subscription
+# sync, GA4 sync when configured, GEO check, and the brief as a workflow artifact.
+# Skips all steps when the required secrets are not configured.
 on:
   schedule:
     - cron: "30 2 * * 1"
@@ -18,6 +18,9 @@ jobs:
       HOLO_GROWTH_DB: holo_growth.db
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       HUBSPOT_PRIVATE_APP_TOKEN: ${{ secrets.HUBSPOT_PRIVATE_APP_TOKEN }}
+      HUBSPOT_SUBSCRIPTION_ID: ${{ vars.HUBSPOT_SUBSCRIPTION_ID }}
+      GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+      GA4_SERVICE_ACCOUNT_JSON: ${{ secrets.GA4_SERVICE_ACCOUNT_JSON }}
       HOLO_SUPABASE_URL: ${{ secrets.HOLO_SUPABASE_URL }}
       HOLO_SUPABASE_SERVICE_KEY: ${{ secrets.HOLO_SUPABASE_SERVICE_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -43,8 +46,13 @@ jobs:
       - name: Run
         if: steps.cfg.outputs.run == 'true'
         run: |
-          pip install -e .
+          pip install -e ".[ga4]"
           holo-growth retention sync
+          if [ -n "$GA4_PROPERTY_ID" ] && [ -n "$GA4_SERVICE_ACCOUNT_JSON" ]; then
+            export GA4_CREDENTIALS_FILE="$RUNNER_TEMP/ga4.json"
+            printf '%s' "$GA4_SERVICE_ACCOUNT_JSON" > "$GA4_CREDENTIALS_FILE"
+            holo-growth web sync
+          fi
           holo-growth geo run
           holo-growth report brief --out weekly_brief.md
 

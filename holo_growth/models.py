@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Persona(StrEnum):
-    STUDENT = "student"
+    YOUNG_ADULT = "young_adult"
     YOUNG_PROFESSIONAL = "young_professional"
     OTHER = "other"
 
@@ -36,7 +36,7 @@ class LifecycleStage(StrEnum):
 
 
 class RawLead(BaseModel):
-    """A row as it came off the signup sheet, after column mapping only."""
+    """A signup row after column mapping, before cleaning."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -70,7 +70,7 @@ class Lead(BaseModel):
 
 
 class Enrichment(BaseModel):
-    """What the LLM (or rule baseline) infers about a lead. Validated strictly."""
+    """Lead attributes inferred by the LLM or the rule baseline. Strictly validated."""
 
     persona: Persona
     intent: Intent

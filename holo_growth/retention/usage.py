@@ -1,8 +1,7 @@
-"""Read Holo product-usage data.
+"""Holo product-usage source.
 
-Only usage metadata is read: who ran an analysis, when, and whether they have
-recorded the outcome. Risk scores, partner details and chat text are never
-selected. A CRM has no business holding someone's dating conversations.
+Reads usage metadata only: analysis timestamps and whether an outcome was recorded.
+Risk scores, partner details and conversation content are never selected.
 """
 
 from __future__ import annotations
@@ -24,9 +23,9 @@ class UserActivity:
     first_name: str | None
     signed_up: datetime
     analyses: list[datetime] = field(default_factory=list)
-    outcome_recorded: list[bool] = field(default_factory=list)  # parallel to analyses
-    marketing_opt_in: bool | None = None  # None = never asked
-    marketing_opt_in_at: datetime | None = None  # when the user last changed the toggle
+    outcome_recorded: list[bool] = field(default_factory=list)  # Index-aligned with `analyses`
+    marketing_opt_in: bool | None = None  # None: never asked
+    marketing_opt_in_at: datetime | None = None  # Time of the user's latest change
 
 
 class UsageSource(Protocol):
@@ -40,7 +39,7 @@ def _parse_ts(value: str) -> datetime:
 
 
 class SupabaseUsageSource:
-    """Reads Holo's Supabase with the service key, via PostgREST and the auth admin API."""
+    """Supabase usage source (PostgREST and the auth admin API, using the service key)."""
 
     name = "supabase"
     PAGE = 1000
@@ -83,7 +82,7 @@ class SupabaseUsageSource:
             page += 1
 
     def _consents(self) -> dict[str, tuple[bool, datetime]]:
-        """Latest marketing choice per user, if the marketing_consents table exists."""
+        """Return the latest marketing choice per user; empty if marketing_consents does not exist."""
         try:
             rows = self._get(
                 "/rest/v1/marketing_consents",
@@ -106,7 +105,7 @@ class SupabaseUsageSource:
         logs = self._get(
             "/rest/v1/analysis_logs",
             {
-                # Deliberately narrow select: no risk_score, no partner fields.
+                # Minimal column set: excludes risk scores and partner fields.
                 "select": "auth_user_id,created_at,actual_outcome",
                 "auth_user_id": "not.is.null",
             },

@@ -1,8 +1,12 @@
-"""HubSpot CRM v3 client: batch upsert by email, with retries and rate-limit handling.
+"""HubSpot client (CRM v3 contacts, Communication Preferences v4 subscriptions).
 
-Uses a private app token (Settings > Integrations > Private apps) with the
-scopes crm.objects.contacts.read, crm.objects.contacts.write and
-crm.schemas.contacts.write. A free developer test account is enough.
+Contacts are upserted in batches keyed on email, with retries on 429 and 5xx
+responses. Authentication uses a Service Key or a legacy private app token, sent as
+a Bearer token.
+
+Required scopes: crm.objects.contacts.read, crm.objects.contacts.write,
+crm.schemas.contacts.write; communication_preferences.read_write when
+HUBSPOT_SUBSCRIPTION_ID is set.
 """
 
 from __future__ import annotations
@@ -12,14 +16,15 @@ import random
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
-from holo_growth.crm.base import CUSTOM_PROPERTIES, UpsertResult
+from holo_growth.crm.base import CUSTOM_PROPERTIES, SubscriptionChange, SubscriptionResult, UpsertResult
 
 log = logging.getLogger(__name__)
 
-BATCH_SIZE = 100  # HubSpot's limit for batch endpoints
+BATCH_SIZE = 100  # HubSpot batch endpoint limit
 GROUP_NAME = "holo_growth"
 
 
@@ -44,6 +49,7 @@ class HubSpotCRM:
         client: httpx.Client | None = None,
         max_attempts: int = 5,
         sleep: Callable[[float], None] = time.sleep,
+        subscription_id: str = "",
     ) -> None:
         if not token:
             raise ValueError("HubSpot token is required")
@@ -52,6 +58,7 @@ class HubSpotCRM:
         self._headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         self._max_attempts = max_attempts
         self._sleep = sleep
+        self.subscription_id = subscription_id
 
     # -- transport -----------------------------------------------------------
 
@@ -78,7 +85,7 @@ class HubSpotCRM:
                 )
                 self._backoff(attempt, resp.headers.get("Retry-After"))
                 continue
-            # 4xx other than 429: a bug or bad data, retrying will not help.
+            # Other 4xx responses indicate invalid input; do not retry.
             raise HubSpotError(resp.status_code, _error_message(resp))
         raise HubSpotError(resp.status_code, f"gave up after {self._max_attempts} attempts")
 
@@ -101,8 +108,11 @@ class HubSpotCRM:
             ok=(200, 201, 409),
         )
         for prop in CUSTOM_PROPERTIES:
+            options: list[str] = list(prop.get("options", []))  # type: ignore[call-overload]
             resp = self._request("GET", f"/crm/v3/properties/contacts/{prop['name']}", ok=(200, 404))
             if resp.status_code == 200:
+                if options:
+                    self._add_missing_options(str(prop["name"]), options, resp.json().get("options", []))
                 continue
             body: dict[str, Any] = {
                 "name": prop["name"],
@@ -111,14 +121,21 @@ class HubSpotCRM:
                 "fieldType": prop["fieldType"],
                 "groupName": GROUP_NAME,
             }
-            options: list[str] = list(prop.get("options", []))  # type: ignore[call-overload]
             if options:
-                body["options"] = [
-                    {"label": o.replace("_", " ").title(), "value": o, "displayOrder": i, "hidden": False}
-                    for i, o in enumerate(options)
-                ]
+                body["options"] = [_option(o, i) for i, o in enumerate(options)]
             self._request("POST", "/crm/v3/properties/contacts", json=body, ok=(200, 201, 409))
             log.info("created HubSpot property", extra={"property": prop["name"]})
+
+    def _add_missing_options(self, name: str, wanted: list[str], existing: list[dict[str, Any]]) -> None:
+        """Append options missing from an existing enumeration. Existing options are kept,
+        so values already stored on contacts remain valid."""
+        have = {o.get("value") for o in existing}
+        missing = [o for o in wanted if o not in have]
+        if not missing:
+            return
+        options = existing + [_option(o, len(existing) + i) for i, o in enumerate(missing)]
+        self._request("PATCH", f"/crm/v3/properties/contacts/{name}", json={"options": options})
+        log.info("added HubSpot property options", extra={"property": name, "options": missing})
 
     # -- contacts ------------------------------------------------------------
 
@@ -137,14 +154,14 @@ class HubSpotCRM:
         return found
 
     def upsert_contacts(self, contacts: list[dict[str, str]]) -> UpsertResult:
-        """Create or update by email. Safe to call repeatedly with the same data."""
+        """Create or update contacts by email. Idempotent."""
         result = UpsertResult()
         for chunk in _chunks(contacts, BATCH_SIZE):
             inputs = [{"idProperty": "email", "id": c["email"], "properties": c} for c in chunk]
             try:
                 resp = self._request("POST", "/crm/v3/objects/contacts/batch/upsert", json={"inputs": inputs})
             except HubSpotError as exc:
-                # One bad batch should not lose the rest of the run.
+                # Record the batch as failed and continue with the remaining batches.
                 result.failed.extend((c["email"], str(exc)) for c in chunk)
                 continue
             data = resp.json()
@@ -158,6 +175,49 @@ class HubSpotCRM:
                 for email in ids:
                     result.failed.append((email, err.get("message", "error")))
         return result
+
+    # -- email subscriptions ---------------------------------------------------
+
+    def subscription_definitions(self) -> list[dict[str, Any]]:
+        """Return the account's subscription type definitions."""
+        resp = self._request("GET", "/communication-preferences/v4/definitions")
+        return list(resp.json().get("results", []))
+
+    def set_email_subscriptions(self, changes: list[SubscriptionChange]) -> SubscriptionResult:
+        """Set the configured subscription status for each contact (one request per contact).
+
+        A 401/403 response stops processing and sets `unavailable`, so the caller keeps
+        the changes queued. Other per-contact errors are recorded in `failed` and
+        processing continues.
+        """
+        result = SubscriptionResult()
+        if not self.subscription_id:
+            result.unavailable = "HUBSPOT_SUBSCRIPTION_ID is not set"
+            return result
+        for ch in changes:
+            body = {
+                "subscriptionId": int(self.subscription_id),
+                "statusState": "SUBSCRIBED" if ch.subscribed else "UNSUBSCRIBED",
+                "legalBasis": "CONSENT_WITH_NOTICE",
+                "legalBasisExplanation": ch.explanation[:500],
+                "channel": "EMAIL",
+            }
+            try:
+                self._request(
+                    "POST", f"/communication-preferences/v4/statuses/{quote(ch.email, safe='@')}", json=body
+                )
+            except HubSpotError as exc:
+                if exc.status in (401, 403):
+                    result.unavailable = str(exc)
+                    return result
+                result.failed.append((ch.email, str(exc)))
+                continue
+            result.updated.append(ch.email)
+        return result
+
+
+def _option(value: str, order: int) -> dict[str, Any]:
+    return {"label": value.replace("_", " ").title(), "value": value, "displayOrder": order, "hidden": False}
 
 
 def _error_message(resp: httpx.Response) -> str:

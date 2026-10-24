@@ -1,7 +1,7 @@
-"""Normalise and validate raw signup rows.
+"""Normalisation and validation of raw signup rows.
 
-Rules are deliberately conservative: a value we can't confidently fix is
-dropped (set to None) and reported, never guessed.
+Values that cannot be corrected with confidence are set to None and reported as
+issues; they are never inferred.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from holo_growth.models import Lead, RawLead, RowIssue
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
-# Common typos seen on event signup sheets. Only whole-domain matches are fixed.
+# Known email domain typos. Only exact whole-domain matches are corrected.
 DOMAIN_TYPOS = {
     "gmial.com": "gmail.com",
     "gmai.com": "gmail.com",
@@ -53,7 +53,7 @@ DISPOSABLE = _disposable_domains()
 
 
 def clean_email(value: str) -> tuple[str | None, str | None]:
-    """Return (email, problem)."""
+    """Return (normalised email, None), or (None, problem) when the value is rejected."""
     v = value.strip().strip("<>").replace(" ", "").lower()
     v = v.rstrip(".,;")
     if not v:
@@ -87,7 +87,7 @@ def clean_phone(value: str) -> str | None:
 
 
 def _title(part: str) -> str:
-    # "o'neil" -> "O'Neil", "de silva" handled per word by caller
+    # Title-cases around apostrophes and hyphens; name particles are handled by the caller.
     return "-".join(
         "'".join(p[:1].upper() + p[1:].lower() for p in seg.split("'")) for seg in part.split("-")
     )
@@ -137,8 +137,8 @@ def clean_row(raw: RawLead, source_event: str) -> tuple[Lead | None, list[RowIss
 
     age, age_problem = clean_age(raw.age)
     if age_problem == "under 18":
-        # Holo is an adult dating-safety app. Minors are rejected outright and
-        # their details are not stored anywhere, including the issue log.
+        # Holo is restricted to adults: reject minors without storing any of their
+        # details, including in the issue log.
         issues.append(
             RowIssue(row_number=raw.row_number, field="age", problem="under 18, row discarded", value="")
         )

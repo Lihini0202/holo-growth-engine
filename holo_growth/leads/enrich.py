@@ -1,14 +1,12 @@
-"""Infer persona, intent, language and interests for a lead.
+"""Lead enrichment: persona, intent, language and interests.
 
-Two enrichers share one interface:
+* RuleEnricher: deterministic keyword rules; the baseline for the labelled
+  evaluation.
+* LLMEnricher: schema-validated LLM output, falling back to the rules on failure.
+  Low-confidence results are routed to review.
 
-* RuleEnricher: keyword rules. Free, deterministic, always available, and the
-  baseline the LLM has to beat on the labelled eval set.
-* LLMEnricher: asks the model for a validated Enrichment. Falls back to the
-  rules if the model fails, and sends low-confidence results to review.
-
-Signup free text is untrusted input. It is passed to the model inside a
-delimited block and the system prompt says to treat it as data only.
+Signup free text is untrusted input. It is passed to the model in a delimited block,
+and the system prompt instructs the model to treat it as data only.
 """
 
 from __future__ import annotations
@@ -22,23 +20,18 @@ from holo_growth.models import Enrichment, Intent, Language, Lead, Persona
 
 log = logging.getLogger(__name__)
 
-STUDENT_HINTS = (
+YOUNG_ADULT_HINTS = (
     "university",
     "uni ",
     "campus",
+    "college",
+    "institute",
+    "academy",
+    "school",
     "student",
     "undergrad",
     "faculty",
-    "college",
-    "sliit",
-    "iit",
-    "nsbm",
-    "uom",
-    "uoc",
-    "uop",
-    "kdu",
-    "sjp",
-    "ucsc",
+    "studying",
     "batch",
 )
 PRO_HINTS = (
@@ -46,6 +39,13 @@ PRO_HINTS = (
     "ltd",
     "plc",
     "inc",
+    "labs",
+    "systems",
+    "studios",
+    "software",
+    "finance",
+    "logistics",
+    "apparel",
     "bank",
     "engineer",
     "analyst",
@@ -55,15 +55,6 @@ PRO_HINTS = (
     "manager",
     "officer",
     "executive",
-    "wso2",
-    "virtusa",
-    "ifs",
-    "dialog",
-    "mas ",
-    "brandix",
-    "hsbc",
-    "lseg",
-    "sysco",
     "works at",
     "working",
 )
@@ -123,18 +114,18 @@ class RuleEnricher:
         reason = (lead.reason or "").lower() + " "
         org = (lead.organisation or "").lower() + " "
 
-        student = any(h in org for h in STUDENT_HINTS) or "student" in reason
+        young = any(h in org for h in YOUNG_ADULT_HINTS) or "student" in reason
         pro = any(h in org for h in PRO_HINTS) or any(h in reason for h in ("work", "office"))
-        if student and not pro:
-            persona, p_conf = Persona.STUDENT, 0.85
-        elif pro and not student:
+        if young and not pro:
+            persona, p_conf = Persona.YOUNG_ADULT, 0.85
+        elif pro and not young:
             persona, p_conf = Persona.YOUNG_PROFESSIONAL, 0.8
-        elif student and pro:
-            persona, p_conf = Persona.STUDENT, 0.5
+        elif young and pro:
+            persona, p_conf = Persona.YOUNG_ADULT, 0.5
         else:
             persona, p_conf = Persona.OTHER, 0.4
             if lead.age is not None:
-                persona = Persona.STUDENT if lead.age <= 23 else Persona.YOUNG_PROFESSIONAL
+                persona = Persona.YOUNG_ADULT if lead.age <= 23 else Persona.YOUNG_PROFESSIONAL
                 p_conf = 0.55
 
         if any(h in reason for h in HIGH_INTENT):
@@ -170,8 +161,8 @@ Holo is a dating-safety app for adults in Sri Lanka that helps people notice whe
 conversation is going cold and decide how to reply.
 
 Classify:
-- persona: student (currently at university or college), young_professional (working),
-  or other.
+- persona: young_adult (roughly 18-24, studying or just starting out), young_professional
+  (established in work), or other.
 - intent: how likely they are to actually use Holo soon. high = describes a concrete
   problem or asks how to start; medium = general interest; low = no interest, came for
   other reasons, or nothing written.
@@ -221,9 +212,9 @@ class LLMEnricher:
             )
             self.last_source = "rules_fallback"
             result = self.fallback.enrich(lead)
-            # A fallback result is never trusted enough to skip review.
+            # Fallback results always require review.
             return result.model_copy(update={"confidence": min(result.confidence, 0.5)})
-        except Exception as exc:  # network errors, auth errors, rate limits after retries
+        except Exception as exc:  # Network, authentication and exhausted rate-limit errors
             log.error(
                 "LLM call errored, using rules", extra={"row": lead.row_number, "error": type(exc).__name__}
             )

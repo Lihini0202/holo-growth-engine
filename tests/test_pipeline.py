@@ -1,7 +1,7 @@
 import json
 
 from holo_growth.consent import ConsentLedger, Purpose
-from holo_growth.crm.base import UpsertResult
+from holo_growth.crm.base import SubscriptionResult, UpsertResult
 from holo_growth.leads.enrich import LLMEnricher, RuleEnricher
 from holo_growth.leads.pipeline import run_leads
 from holo_growth.llm import ScriptedLLM
@@ -9,11 +9,11 @@ from holo_growth.review import resolve_enrichment
 from holo_growth.synthetic import make_event_file
 
 SHEET = """
-Name,Email Address,Mobile,University / Workplace,Age,What brings you to Holo?,Send me Holo updates
-kasun perera,KASUN@gmail.com,077 123 4567,University of Moratuwa,21,I keep getting ghosted need this,Yes
+Name,Email Address,Mobile,School / Workplace,Age,What brings you to Holo?,Send me Holo updates
+kasun perera,KASUN@gmail.com,077 123 4567,Northfield College,21,I keep getting ghosted need this,Yes
 Kasun Perera,kasun@gmail.com,,,,,yes
-Dilini Fernando,dilini@gmial.com,,WSO2,26,Curious about the AI side,Yes
-No Consent,nc@gmail.com,,SLIIT,22,just browsing,No
+Dilini Fernando,dilini@gmial.com,,Northwind Labs,26,Curious about the AI side,Yes
+No Consent,nc@gmail.com,,Lakeview Institute,22,just browsing,No
 Bad Email,bad-email,,,,,Yes
 Teen,teen@gmail.com,,,16,,Yes
 """
@@ -27,8 +27,8 @@ def test_end_to_end_counts_and_crm(conn, crm, write_csv):
     assert report.uploaded_created == 2
     kasun = crm.get("kasun@gmail.com")
     assert kasun["firstname"] == "Kasun" and kasun["phone"] == "+94771234567"
-    assert kasun["holo_source_event"] == "Launch" and kasun["holo_persona"] == "student"
-    assert crm.get("dilini@gmail.com") is not None  # typo domain fixed
+    assert kasun["holo_source_event"] == "Launch" and kasun["holo_persona"] == "young_adult"
+    assert crm.get("dilini@gmail.com") is not None  # domain typo corrected
     assert crm.get("nc@gmail.com") is None  # no consent, never uploaded
     assert conn.execute("SELECT COUNT(*) FROM leads WHERE email = 'nc@gmail.com'").fetchone()[0] == 0
 
@@ -54,8 +54,17 @@ def test_unsubscribed_person_is_not_reuploaded_from_old_sheet(conn, crm, write_c
     run_leads(p, "Launch", conn, crm, RuleEnricher())
     ConsentLedger(conn).withdraw("kasun@gmail.com")
     report = run_leads(p, "Launch", conn, crm, RuleEnricher(), force=True)
-    assert report.not_consented == 2  # kasun now, plus the original no-consent row
+    assert report.not_consented == 2  # Withdrawn contact plus the original no-consent row
     assert not ConsentLedger(conn).allowed("kasun@gmail.com")
+
+
+def test_dry_run_counts_match_real_run_after_unsubscribe(conn, crm, write_csv):
+    p = write_csv(SHEET)
+    run_leads(p, "Launch", conn, crm, RuleEnricher())
+    ConsentLedger(conn).withdraw("kasun@gmail.com")
+    preview = run_leads(p, "Launch", conn, crm, RuleEnricher(), force=True, dry_run=True)
+    real = run_leads(p, "Launch", conn, crm, RuleEnricher(), force=True)
+    assert preview.not_consented == real.not_consented == 2
 
 
 def test_low_confidence_goes_to_review_without_enrichment_fields(conn, crm, write_csv):
@@ -69,9 +78,9 @@ def test_low_confidence_goes_to_review_without_enrichment_fields(conn, crm, writ
     assert len(queue) == 2
 
     review_id = next(r["id"] for r in queue if r["ref"] == "kasun@gmail.com")
-    out = resolve_enrichment(conn, crm, review_id, persona="student", intent="high")
+    out = resolve_enrichment(conn, crm, review_id, persona="young_adult", intent="high")
     assert out["status"] == "approved"
-    assert crm.get("kasun@gmail.com")["holo_persona"] == "student"
+    assert crm.get("kasun@gmail.com")["holo_persona"] == "young_adult"
     row = conn.execute(
         "SELECT needs_review, enrichment_source FROM leads WHERE email='kasun@gmail.com'"
     ).fetchone()
@@ -79,8 +88,8 @@ def test_low_confidence_goes_to_review_without_enrichment_fields(conn, crm, writ
 
 
 def test_prompt_injection_in_signup_text_does_not_reach_crm_unreviewed(conn, crm, tmp_path):
-    # The scripted model "obeys" the injection; the pipeline must still treat the
-    # result as data validated by schema, and the rules fallback must not either.
+    # The sample sheet contains a prompt-injection attempt requesting high intent;
+    # it must not be honoured.
     p = make_event_file(tmp_path / "e.csv", 30, seed=3)
     report = run_leads(p, "Launch", conn, crm, RuleEnricher())
     row = conn.execute(
@@ -101,6 +110,9 @@ class FlakyCRM:
 
     def upsert_contacts(self, contacts):
         return UpsertResult(created=len(contacts) - 1, failed=[(contacts[0]["email"], "boom")])
+
+    def set_email_subscriptions(self, changes):
+        return SubscriptionResult(updated=[c.email for c in changes])
 
 
 def test_partial_crm_failure_marks_run_partial(conn, write_csv):

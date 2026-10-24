@@ -1,15 +1,12 @@
 """Pre-send checks for campaign copy.
 
-Deterministic rules run first: they are cheap, explainable and cannot be
-talked out of a decision. An optional LLM tone review adds a second opinion,
-but it can only add findings, never clear one.
+Deterministic rules run first. The optional LLM tone review can add findings but
+never remove them.
 
-Two rules are specific to Holo:
-* No email may reveal anything about a user's analyses (risk bands, partner
-  names, "your conversation with..."). Inboxes are shared and phones get
-  borrowed; a marketing email is not a private channel.
-* No fear or guilt. Holo's product rule is "kind, not judgmental", and the
-  marketing should sound like the product.
+Holo-specific rules:
+* No reference to a user's analyses (risk bands, partner names, "your conversation
+  with"). Email is not treated as a private channel.
+* No fear- or guilt-based language, in line with the product's tone guidelines.
 """
 
 from __future__ import annotations

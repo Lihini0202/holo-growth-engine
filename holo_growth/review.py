@@ -1,4 +1,4 @@
-"""Human review queue: approve or correct low-confidence enrichments, then push to the CRM."""
+"""Review queue: approve or correct low-confidence enrichments and sync them to the CRM."""
 
 from __future__ import annotations
 

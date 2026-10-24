@@ -1,7 +1,6 @@
-"""A local CRM stand-in backed by SQLite.
+"""SQLite-backed CRM used when no HubSpot credentials are configured.
 
-Used when no HubSpot token is configured, so the full pipeline (and the demo)
-runs offline. It implements the same upsert-by-email semantics.
+Implements the same upsert-by-email semantics as the HubSpot client.
 """
 
 from __future__ import annotations
@@ -9,7 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from holo_growth.crm.base import UpsertResult
+from holo_growth.crm.base import SubscriptionChange, SubscriptionResult, UpsertResult
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS local_crm_contacts (
@@ -17,6 +16,14 @@ CREATE TABLE IF NOT EXISTS local_crm_contacts (
     properties TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Stored separately from contact properties, mirroring HubSpot.
+CREATE TABLE IF NOT EXISTS local_crm_subscriptions (
+    email       TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,                -- SUBSCRIBED | UNSUBSCRIBED
+    explanation TEXT,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -68,6 +75,27 @@ class LocalCRM:
         self.conn.commit()
         return result
 
+    def set_email_subscriptions(self, changes: list[SubscriptionChange]) -> SubscriptionResult:
+        result = SubscriptionResult()
+        for ch in changes:
+            self.conn.execute(
+                """
+                INSERT INTO local_crm_subscriptions (email, status, explanation) VALUES (?, ?, ?)
+                ON CONFLICT(email) DO UPDATE SET status = excluded.status,
+                    explanation = excluded.explanation, updated_at = datetime('now')
+                """,
+                (ch.email.lower(), "SUBSCRIBED" if ch.subscribed else "UNSUBSCRIBED", ch.explanation),
+            )
+            result.updated.append(ch.email.lower())
+        self.conn.commit()
+        return result
+
+    def subscription(self, email: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT status FROM local_crm_subscriptions WHERE email = ?", (email.lower(),)
+        ).fetchone()
+        return row["status"] if row else None
+
     def get(self, email: str) -> dict[str, str] | None:
         row = self.conn.execute(
             "SELECT properties FROM local_crm_contacts WHERE email = ?", (email.lower(),)
@@ -79,5 +107,9 @@ def crm_from_settings(settings, conn: sqlite3.Connection):
     if settings.use_real_crm:
         from holo_growth.crm.hubspot import HubSpotCRM
 
-        return HubSpotCRM(settings.hubspot_token, settings.hubspot_base_url)
+        return HubSpotCRM(
+            settings.hubspot_token,
+            settings.hubspot_base_url,
+            subscription_id=settings.hubspot_subscription_id,
+        )
     return LocalCRM(conn)

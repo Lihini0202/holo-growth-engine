@@ -1,8 +1,7 @@
-"""Lifecycle stages from Holo usage. Pure functions, no I/O, easy to test.
+"""Lifecycle stage classification from Holo usage. Pure functions.
 
-Thresholds mirror Holo's own product rhythm: an outcome is asked for 14 days
-after an analysis and stops being asked at 60 (FOLLOW_UP_AFTER_DAYS and
-FOLLOW_UP_EXPIRES_DAYS in Holo's tasks.py).
+Outcome thresholds match the Holo app's follow-up schedule (FOLLOW_UP_AFTER_DAYS = 14
+and FOLLOW_UP_EXPIRES_DAYS = 60 in tasks.py).
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ class LifecycleSnapshot:
 
 
 def pending_validations(act: UserActivity, now: datetime) -> int:
-    """Analyses old enough to have a known outcome that the user hasn't confirmed."""
+    """Count analyses inside the outcome window whose outcome has not been recorded."""
     ripe = now - timedelta(days=OUTCOME_RIPE_DAYS)
     stale = now - timedelta(days=OUTCOME_EXPIRES_DAYS)
     return sum(

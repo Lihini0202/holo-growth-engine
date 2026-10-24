@@ -1,8 +1,7 @@
-"""Measure enrichment quality against a labelled set.
+"""Enrichment quality evaluation against a labelled set.
 
-Reports accuracy per field, how much gets routed to review, and accuracy on
-the auto-accepted part only. That last number is the one that matters: it is
-the error rate of what reaches the CRM without a human looking at it.
+Reports per-field accuracy, review rate, and the accuracy of auto-accepted results,
+i.e. the error rate of data written to the CRM without human review.
 """
 
 from __future__ import annotations

@@ -10,12 +10,20 @@ from holo_growth import reports
 from holo_growth.cli import app
 from holo_growth.evaluation import evaluate
 from holo_growth.leads.enrich import RuleEnricher
+from holo_growth.leads.pipeline import run_leads
 from holo_growth.synthetic import make_eval_set
 
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    for var in ("ANTHROPIC_API_KEY", "HUBSPOT_PRIVATE_APP_TOKEN", "HOLO_SUPABASE_URL", "OPENROUTER_API_KEY"):
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "HUBSPOT_PRIVATE_APP_TOKEN",
+        "HOLO_SUPABASE_URL",
+        "OPENROUTER_API_KEY",
+        "GA4_PROPERTY_ID",
+        "GA4_CREDENTIALS_FILE",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HOLO_GROWTH_DB", str(tmp_path / "t.db"))
     monkeypatch.setenv("HOLO_GROWTH_INBOX", str(tmp_path / "inbox"))
@@ -74,6 +82,18 @@ def test_mcp_tools_listed_and_callable(env):
 
     asyncio.run(go())
     mcp_server._svc.cache_clear()
+
+
+def test_lead_rows_agree_with_event_funnel(conn, crm, write_csv):
+    p = write_csv("Name,Email,Consent\nA,a@gmail.com,yes\nB,b@gmail.com,yes\nC,c@gmail.com,no\n")
+    run_leads(p, "E", conn, crm, RuleEnricher())
+    funnel = reports.event_funnel(conn)[0]
+    rows = reports.lead_rows(conn)
+    assert len(rows) == funnel["leads"]
+    assert sum(r["hot"] for r in rows) == funnel["hot"]
+    assert sum(r["needs_review"] for r in rows) == funnel["in_review"]
+    assert all(r["persona"] == "in review" for r in rows if r["needs_review"])
+    assert reports.geo_answers(conn) == [] and reports.recent_drafts(conn) == []
 
 
 def test_weekly_brief_handles_empty_db(conn):

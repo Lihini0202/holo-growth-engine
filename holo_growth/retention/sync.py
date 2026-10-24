@@ -1,9 +1,8 @@
-"""Sync lifecycle stages to the CRM, consent first.
+"""Lifecycle sync to the CRM, gated by consent.
 
-* Users whose Holo marketing choice is "yes" get their stage synced.
-* Users who withdrew are synced once more as opted_out (so CRM workflows stop),
-  then never again.
-* Users never asked are not synced at all, and their email is not stored here.
+* Users with marketing consent are synced with their current stage.
+* Users who withdrew consent are synced once as opted_out, then excluded.
+* Users who never opted in are not synced, and their email is not stored.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from datetime import UTC, datetime
 from holo_growth import db
 from holo_growth.consent import ConsentLedger, Purpose
 from holo_growth.crm.base import CRM
+from holo_growth.crm.subscriptions import sync_subscriptions
 from holo_growth.models import LifecycleStage
 from holo_growth.retention.lifecycle import classify
 from holo_growth.retention.usage import UsageSource
@@ -36,14 +36,16 @@ class RetentionReport:
     failed: int = 0
     stages: dict[str, int] = field(default_factory=dict)
     pending_validations_total: int = 0
+    subscriptions: str | None = None  # Result of the post-upload subscription sync
 
     def summary(self) -> str:
         stages = ", ".join(f"{k} {v}" for k, v in sorted(self.stages.items()))
-        return (
+        text = (
             f"{self.users_read} Holo users read. Stages: {stages}. Synced {self.synced} to CRM "
             f"({self.opted_out_synced} as opted out); {self.not_consented} not synced (no "
             f"consent). {self.pending_validations_total} predictions awaiting outcomes."
         )
+        return f"{text} {self.subscriptions}" if self.subscriptions else text
 
 
 def run_retention(
@@ -75,8 +77,8 @@ def run_retention(
             state = ledger.state(email, Purpose.MARKETING_EMAIL) if email else None
             if dry_run and act.marketing_opt_in is not None:
                 state = act.marketing_opt_in
-            # "Unsubscribed" and "never said yes" are different: only the first is
-            # ever told to the CRM, so its workflows stop.
+            # A withdrawal after a grant is propagated to the CRM once; contacts who
+            # never opted in are never sent.
             withdrawn = bool(email) and not dry_run and ledger.withdrew_after_grant(email or "")
             snap = classify(act, now, consent_withdrawn=withdrawn)
             stages[snap.stage.value] += 1
@@ -90,7 +92,7 @@ def run_retention(
                     "SELECT stage FROM lifecycle WHERE holo_user_id = ?", (act.user_id,)
                 ).fetchone()
                 if previously is None or previously["stage"] != LifecycleStage.OPTED_OUT:
-                    keep_email = email  # tell the CRM once, then never again
+                    keep_email = email  # Propagate the opt-out once
 
             if keep_email:
                 props = {
@@ -140,7 +142,9 @@ def run_retention(
             result = crm.upsert_contacts(contacts)
             report.synced = result.created + result.updated
             report.failed = len(result.failed)
-        elif dry_run:
+        if not dry_run:
+            report.subscriptions = sync_subscriptions(conn, crm).summary()
+        if dry_run:
             report.synced = len(contacts)
 
         report.stages = dict(stages)

@@ -14,4 +14,14 @@ htmlcov/
 inbox/
 weekly_brief.md
 samples/*
-!samples/campus_launch_signups.csv
+!samples/event_signups.csv
+
+# Personal test data
+my_test.csv
+
+# Service-account keys (GA4) and other credentials
+secrets/
+*-key.json
+
+# Demo videos (shared via external links, not stored in git)
+media/

@@ -1,4 +1,4 @@
-"""CRM interface. The pipeline only talks to this, never to HubSpot directly."""
+"""CRM interface. Pipelines depend on this protocol, not on a specific CRM."""
 
 from __future__ import annotations
 
@@ -13,6 +13,22 @@ class UpsertResult:
     failed: list[tuple[str, str]] = field(default_factory=list)  # (email, error)
 
 
+@dataclass(frozen=True)
+class SubscriptionChange:
+    """Target marketing-email subscription state for one contact, derived from the consent ledger."""
+
+    email: str
+    subscribed: bool
+    explanation: str  # Source and time of the consent decision; stored as the legal-basis explanation
+
+
+@dataclass
+class SubscriptionResult:
+    updated: list[str] = field(default_factory=list)  # Emails accepted by the CRM
+    failed: list[tuple[str, str]] = field(default_factory=list)  # (email, error); retried on the next sync
+    unavailable: str | None = None  # Reason the CRM rejected all updates (plan, scope or configuration)
+
+
 class CRM(Protocol):
     name: str
 
@@ -22,8 +38,10 @@ class CRM(Protocol):
 
     def upsert_contacts(self, contacts: list[dict[str, str]]) -> UpsertResult: ...
 
+    def set_email_subscriptions(self, changes: list[SubscriptionChange]) -> SubscriptionResult: ...
 
-# Custom contact properties this project owns in HubSpot. Created on first run.
+
+# Custom contact properties owned by this project; created on first run.
 CUSTOM_PROPERTIES: list[dict[str, object]] = [
     {"name": "holo_source_event", "label": "Holo source event", "type": "string", "fieldType": "text"},
     {
@@ -31,7 +49,7 @@ CUSTOM_PROPERTIES: list[dict[str, object]] = [
         "label": "Holo persona",
         "type": "enumeration",
         "fieldType": "select",
-        "options": ["student", "young_professional", "other"],
+        "options": ["young_adult", "young_professional", "other"],
     },
     {
         "name": "holo_intent",
