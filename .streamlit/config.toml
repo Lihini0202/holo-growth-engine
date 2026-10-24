@@ -1,0 +1,37 @@
+# Streamlit theme. Loaded when Streamlit runs from the repository root.
+# Light and dark variants follow the viewer's system setting or the in-app toggle.
+# Chart colours use the categorical palette, stepped separately for each surface.
+[client]
+toolbarMode = "minimal"
+
+[theme]
+font = "'Segoe UI', 'Segoe UI Web', -apple-system, 'Helvetica Neue', Arial, sans-serif"
+baseRadius = "8px"
+
+[theme.light]
+primaryColor = "#2a78d6"
+backgroundColor = "#f4f6fa"
+secondaryBackgroundColor = "#eef1f6"
+textColor = "#1b2230"
+borderColor = "#e1e6ee"
+chartCategoricalColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+
+[theme.light.sidebar]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#eef1f6"
+textColor = "#1b2230"
+borderColor = "#e1e6ee"
+
+[theme.dark]
+primaryColor = "#3987e5"
+backgroundColor = "#0e131c"
+secondaryBackgroundColor = "#1c2433"
+textColor = "#e6e9ef"
+borderColor = "#263042"
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
+
+[theme.dark.sidebar]
+backgroundColor = "#090d14"
+secondaryBackgroundColor = "#1c2433"
+textColor = "#e6e9ef"
+borderColor = "#1c2433"
