@@ -10,6 +10,11 @@ campaign emails checked before anyone sends them, website analytics from GA4, an
 of how Holo appears in AI assistant answers. Every part runs from the command line, a
 dashboard, or Claude through an MCP server.
 
+<a href="https://lihiniedirisingha.vercel.app/work/holo-growth-engine.html"><img src="https://lihiniedirisingha.vercel.app/images/holo-growth-engine-poster.jpg" alt="Watch the Holo Growth Engine demo video" width="720"></a>
+
+**[Watch the demo video and read the case study](https://lihiniedirisingha.vercel.app/work/holo-growth-engine.html)**: the lead pipeline, the consent
+ledger, live HubSpot, Salesforce and GA4 accounts, and the dashboard.
+
 ```
 $ holo-growth leads process saturday_signups.csv --event "Online Dating Safety Workshop - Colombo"
 
