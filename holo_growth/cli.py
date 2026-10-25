@@ -233,7 +233,7 @@ def consent_types() -> None:
     """List HubSpot subscription types and their IDs (for HUBSPOT_SUBSCRIPTION_ID)."""
     s = _services()
     if not hasattr(s.crm, "subscription_definitions"):
-        typer.echo("No HubSpot token set: the local CRM has a single built-in subscription.")
+        typer.echo(f"Subscription types apply to HubSpot. The {s.crm.name} CRM uses a single email opt-out.")
         return
     for d in s.crm.subscription_definitions():
         flag = "" if d.get("isActive", True) else "  (inactive)"

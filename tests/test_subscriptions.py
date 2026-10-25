@@ -123,7 +123,13 @@ def test_dry_run_sends_no_subscriptions(conn, write_csv):
 
 @pytest.fixture
 def cli_env(tmp_path, monkeypatch):
-    for var in ("HUBSPOT_PRIVATE_APP_TOKEN", "GA4_PROPERTY_ID", "GA4_CREDENTIALS_FILE"):
+    for var in (
+        "HUBSPOT_PRIVATE_APP_TOKEN",
+        "GA4_PROPERTY_ID",
+        "GA4_CREDENTIALS_FILE",
+        "CRM_PROVIDER",
+        "SALESFORCE_DOMAIN",
+    ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HOLO_GROWTH_DB", str(tmp_path / "t.db"))
     monkeypatch.chdir(tmp_path)

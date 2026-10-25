@@ -41,6 +41,8 @@ class Services:
     def _subscription_mode(self) -> str:
         if self.crm.name == "local":
             return "local"
+        if self.crm.name == "salesforce":
+            return "salesforce Lead.HasOptedOutOfEmail"
         if self.settings.hubspot_subscription_id:
             return f"hubspot subscription {self.settings.hubspot_subscription_id}"
         return "property only (set HUBSPOT_SUBSCRIPTION_ID)"

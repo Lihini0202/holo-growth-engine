@@ -104,7 +104,16 @@ class LocalCRM:
 
 
 def crm_from_settings(settings, conn: sqlite3.Connection):
-    if settings.use_real_crm:
+    if settings.crm == "salesforce":
+        from holo_growth.crm.salesforce import SalesforceCRM
+
+        return SalesforceCRM(
+            settings.salesforce_domain,
+            settings.salesforce_client_id,
+            settings.salesforce_client_secret,
+            settings.salesforce_api_version,
+        )
+    if settings.crm == "hubspot":
         from holo_growth.crm.hubspot import HubSpotCRM
 
         return HubSpotCRM(

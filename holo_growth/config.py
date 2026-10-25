@@ -29,6 +29,13 @@ class Settings:
     # HubSpot subscription type for marketing-email consent (see `holo-growth consent types`).
     # When unset, consent is written only to the holo_marketing_consent contact property.
     hubspot_subscription_id: str = field(default_factory=lambda: _env("HUBSPOT_SUBSCRIPTION_ID"))
+    # hubspot | salesforce. When unset, the CRM whose credentials are present is used.
+    crm_provider: str = field(default_factory=lambda: _env("CRM_PROVIDER").lower())
+    # Salesforce External Client App (OAuth client credentials flow).
+    salesforce_domain: str = field(default_factory=lambda: _env("SALESFORCE_DOMAIN"))
+    salesforce_client_id: str = field(default_factory=lambda: _env("SALESFORCE_CLIENT_ID"))
+    salesforce_client_secret: str = field(default_factory=lambda: _env("SALESFORCE_CLIENT_SECRET"))
+    salesforce_api_version: str = field(default_factory=lambda: _env("SALESFORCE_API_VERSION", "v62.0"))
 
     # GA4 Data API (read-only, aggregate traffic by source)
     ga4_property_id: str = field(default_factory=lambda: _env("GA4_PROPERTY_ID"))
@@ -58,8 +65,23 @@ class Settings:
         return bool(self.anthropic_api_key)
 
     @property
+    def has_salesforce(self) -> bool:
+        return bool(self.salesforce_domain and self.salesforce_client_id and self.salesforce_client_secret)
+
+    @property
+    def crm(self) -> str:
+        """The CRM in use: the configured provider, otherwise the one with credentials, otherwise local."""
+        if self.crm_provider == "salesforce" and self.has_salesforce:
+            return "salesforce"
+        if self.crm_provider == "hubspot" and self.hubspot_token:
+            return "hubspot"
+        if self.hubspot_token:
+            return "hubspot"
+        return "salesforce" if self.has_salesforce else "local"
+
+    @property
     def use_real_crm(self) -> bool:
-        return bool(self.hubspot_token)
+        return self.crm != "local"
 
     @property
     def use_real_ga4(self) -> bool:

@@ -23,6 +23,8 @@ def env(tmp_path, monkeypatch):
         "OPENROUTER_API_KEY",
         "GA4_PROPERTY_ID",
         "GA4_CREDENTIALS_FILE",
+        "CRM_PROVIDER",
+        "SALESFORCE_DOMAIN",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("HOLO_GROWTH_DB", str(tmp_path / "t.db"))
