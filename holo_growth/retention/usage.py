@@ -23,7 +23,8 @@ class UserActivity:
     first_name: str | None
     signed_up: datetime
     analyses: list[datetime] = field(default_factory=list)
-    outcome_recorded: list[bool] = field(default_factory=list)  # Index-aligned with `analyses`
+    # Parallel to `analyses`; True when an outcome or a "Not sure" answer is recorded.
+    outcome_recorded: list[bool] = field(default_factory=list)
     marketing_opt_in: bool | None = None  # None: never asked
     marketing_opt_in_at: datetime | None = None  # Time of the user's latest change
 
@@ -101,15 +102,26 @@ class SupabaseUsageSource:
             latest[str(r["user_id"])] = (bool(r["granted"]), _parse_ts(str(r["recorded_at"])))
         return latest
 
+    def _analysis_logs(self) -> list[dict[str, object]]:
+        """Return usage rows for analyses that belong to a user.
+
+        Includes `outcome_skipped` (a "Not sure" answer) when the column exists, and falls
+        back to the base column set otherwise.
+        """
+        # Minimal column set: excludes risk scores and partner fields.
+        base = "auth_user_id,created_at,actual_outcome"
+        try:
+            return self._get(
+                "/rest/v1/analysis_logs",
+                {"select": f"{base},outcome_skipped", "auth_user_id": "not.is.null"},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400 or "outcome_skipped" not in exc.response.text:
+                raise
+            return self._get("/rest/v1/analysis_logs", {"select": base, "auth_user_id": "not.is.null"})
+
     def users(self) -> list[UserActivity]:
-        logs = self._get(
-            "/rest/v1/analysis_logs",
-            {
-                # Minimal column set: excludes risk scores and partner fields.
-                "select": "auth_user_id,created_at,actual_outcome",
-                "auth_user_id": "not.is.null",
-            },
-        )
+        logs = self._analysis_logs()
         profiles = {
             str(p["id"]): p.get("first_name")
             for p in self._get("/rest/v1/user_profiles", {"select": "id,first_name"})
@@ -133,7 +145,9 @@ class SupabaseUsageSource:
             if act is None:
                 continue
             act.analyses.append(_parse_ts(str(row["created_at"])))
-            act.outcome_recorded.append(row.get("actual_outcome") is not None)
+            act.outcome_recorded.append(
+                row.get("actual_outcome") is not None or bool(row.get("outcome_skipped"))
+            )
         return list(by_user.values())
 
 
