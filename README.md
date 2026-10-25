@@ -5,7 +5,7 @@ a dating safety application that analyses a conversation and reports whether the
 person is losing interest.
 
 Holo is the product. This repository covers everything that turns events and sign ups into
-active users: an event lead pipeline into HubSpot, lifecycle stages from product usage,
+active users: an event lead pipeline into HubSpot or Salesforce, lifecycle stages from product usage,
 campaign emails checked before anyone sends them, website analytics from GA4, and tracking
 of how Holo appears in AI assistant answers. Every part runs from the command line, a
 dashboard, or Claude through an MCP server.
@@ -32,7 +32,7 @@ HOLO_GROWTH_DB=demo.db streamlit run dashboard/app.py
 ## Architecture
 
 ```
-Event sign up sheet ──> Lead pipeline ─────┬──> HubSpot
+Event sign up sheet ──> Lead pipeline ─────┬──> HubSpot or Salesforce
 Holo Supabase ────────> Lifecycle sync ────┤    contacts, lifecycle stages,
   (usage metadata only)                    │    email subscription status
                         Consent ledger ────┘
@@ -45,8 +45,8 @@ Claude API (optional): enrichment, drafting, tone review and GEO checks
 
 <table>
   <tr><th align="left">Component</th><th align="left">Responsibility</th><th align="left">Outcome</th></tr>
-  <tr><td><b>Lead pipeline</b></td><td>Maps messy columns, corrects email domain typos such as <code>gmial.com</code>, normalises Sri Lankan phone numbers, merges duplicates, removes anyone who did not opt in, enriches with Claude (persona, intent, language), scores, and upserts to HubSpot</td><td>Event lists cleaned, enriched and uploaded the same day</td></tr>
-  <tr><td><b>Lifecycle sync</b></td><td>Assigns each Holo user a stage (new, activated, engaged, at risk, dormant) from product usage, counts predictions awaiting the user's confirmation, and syncs consented users to HubSpot</td><td>CRM data entered once, from the source</td></tr>
+  <tr><td><b>Lead pipeline</b></td><td>Maps messy columns, corrects email domain typos such as <code>gmial.com</code>, normalises Sri Lankan phone numbers, merges duplicates, removes anyone who did not opt in, enriches with Claude (persona, intent, language), scores, and upserts to the CRM</td><td>Event lists cleaned, enriched and uploaded the same day</td></tr>
+  <tr><td><b>Lifecycle sync</b></td><td>Assigns each Holo user a stage (new, activated, engaged, at risk, dormant) from product usage, counts predictions awaiting the user's confirmation, and syncs consented users to the CRM</td><td>CRM data entered once, from the source</td></tr>
   <tr><td><b>Campaign checks</b></td><td>Drafts lifecycle emails (Claude or templates) and blocks false urgency, guarantees, accuracy claims, off brand tone, unknown links and any reference to a user's private analyses</td><td>Every email checked before it is sent</td></tr>
   <tr><td><b>GEO tracker</b></td><td>Asks Claude and any OpenRouter model the questions Holo users ask, and records whether Holo is named and which competitors are</td><td>Visibility in AI search, tracked over time</td></tr>
   <tr><td><b>Website sign ups</b></td><td>Pulls daily sessions and sign ups by source from GA4 (Instagram, event QR codes, ChatGPT referrals and more)</td><td>The channels that bring sign ups</td></tr>
@@ -89,6 +89,15 @@ errors from 207 responses. The run is marked <code>partial</code>, failed rows a
 rerunning is safe because upserts are keyed on email. A file that was already processed is
 skipped unless forced.
 
+**Salesforce is a drop in alternative to HubSpot.** Contacts become Leads keyed on a
+unique external ID, <code>Holo_Email__c</code>, so reruns update a lead instead of creating a
+second one. The first run creates the nine <code>Holo_*</code> custom fields and a
+<code>Holo_Growth_Engine</code> permission set that grants access to them and to the standard
+<code>HasOptedOutOfEmail</code> field, which carries the consent ledger. Placeholder values for
+the required <code>LastName</code> and <code>Company</code> fields are set only when a lead is
+created, so an update never replaces real data. Leads are sent in batches of 200 through the
+composite upsert API, with the same retries and per record error reporting as HubSpot.
+
 **Drafts are never sent automatically.** A draft that passes every check is ready for a
 person to load into HubSpot. Sinhala and Tamil drafts always go to a native speaker for
 review.
@@ -103,6 +112,7 @@ present and runs offline otherwise; <code>holo-growth status</code> shows the ac
   <tr><td>Claude</td><td><code>ANTHROPIC_API_KEY</code></td><td>Enrichment, drafting, tone review and GEO</td></tr>
   <tr><td>HubSpot</td><td><code>HUBSPOT_PRIVATE_APP_TOKEN</code></td><td>A Service Key from any HubSpot account, including free accounts (Development, Keys, Service keys); legacy private app tokens also work. Custom <code>holo_*</code> properties are created on the first run</td></tr>
   <tr><td>HubSpot email subscriptions</td><td><code>HUBSPOT_SUBSCRIPTION_ID</code></td><td>Requires the <code>communication_preferences.read_write</code> scope; <code>holo-growth consent types</code> lists the IDs. When unset, consent is written to the <code>holo_marketing_consent</code> property</td></tr>
+  <tr><td>Salesforce</td><td><code>SALESFORCE_DOMAIN</code>, <code>SALESFORCE_CLIENT_ID</code>, <code>SALESFORCE_CLIENT_SECRET</code>, <code>CRM_PROVIDER</code></td><td>Free with a Developer Edition org. Create an External Client App with the client credentials flow and a Run As user, and use the org's My Domain URL. Custom <code>Holo_*</code> Lead fields and their permission set are created on the first run. Set <code>CRM_PROVIDER=salesforce</code> when HubSpot credentials are also present</td></tr>
   <tr><td>GA4</td><td><code>GA4_PROPERTY_ID</code>, <code>GA4_CREDENTIALS_FILE</code></td><td>Free. Install the <code>ga4</code> extra and use a Google Cloud service account with Viewer access to the property. <code>GA4_SIGNUP_EVENT</code> defaults to <code>sign_up</code></td></tr>
   <tr><td>Holo</td><td><code>HOLO_SUPABASE_URL</code>, <code>HOLO_SUPABASE_SERVICE_KEY</code></td><td>Read only. Marketing consent requires the table in <code>integrations/holo/marketing_consent.sql</code>. "Not sure" answers are read from <code>outcome_skipped</code></td></tr>
   <tr><td>Additional GEO providers</td><td><code>OPENROUTER_API_KEY</code>, <code>HOLO_GEO_OPENROUTER_MODELS</code></td><td>The same provider Holo uses for its reply coach</td></tr>
@@ -117,7 +127,7 @@ holo-growth retention sync
 holo-growth content draft validation_pending
 holo-growth geo run
 holo-growth consent withdraw someone@gmail.com
-holo-growth consent sync                 # push consent changes to HubSpot subscriptions
+holo-growth consent sync                 # push consent changes to the CRM
 holo-growth web sync                     # GA4 sessions and sign ups by source, last 28 days
 holo-growth report brief --out weekly_brief.md
 ```
@@ -186,7 +196,7 @@ holo_growth/
 ├── retention/      usage sources (Supabase, synthetic), lifecycle rules, CRM sync
 ├── content/        campaign briefs and templates, checks before sending
 ├── geo/            providers, mention detection
-├── crm/            HubSpot client, local SQLite CRM, consent to subscription outbox
+├── crm/            HubSpot and Salesforce clients, local SQLite CRM, consent outbox
 ├── web/            GA4 traffic by source, plus a synthetic source for the demo
 ├── consent.py      append only consent ledger
 ├── llm.py          Claude client with validated structured output
@@ -207,6 +217,10 @@ integrations/       Holo migration, Claude MCP configuration
   account in October 2026: subscribe, unsubscribe with the legal basis note, and a repeat
   sync that sends nothing new. A change HubSpot has not accepted stays in the outbox and is
   retried on the next sync.
+* Salesforce is verified on a Developer Edition org in October 2026: custom fields and the
+  permission set created on the first run, leads created from a sign up sheet, subscribe and
+  unsubscribe through <code>HasOptedOutOfEmail</code>, and a repeat sync that sends nothing new.
+  Salesforce uses a single email opt out, so HubSpot subscription types do not apply.
 * GA4 provides totals by traffic source. Attributing an individual lead to a source uses UTM
   parameters captured at sign up in the Holo app.
 * GA4 is connected to a live property, with service account authentication, Data API access
